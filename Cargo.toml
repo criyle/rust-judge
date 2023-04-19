@@ -1,0 +1,13 @@
+[package]
+name = "rust-sandbox"
+version = "0.1.0"
+authors = ["criyle <gaoyang4425@gmail.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = "1.0"
+nix = "0.26"
+tokio = { version = "1", features = ["full"] }
+libc = "0.2"
