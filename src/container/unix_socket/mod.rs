@@ -4,11 +4,10 @@ use nix::sys::socket::{
     recvmsg, sendmsg, setsockopt, socketpair, AddressFamily, ControlMessage, ControlMessageOwned,
     MsgFlags, SockFlag, SockType,
 };
-use std::io::{Error, ErrorKind, Result, IoSlice, IoSliceMut};
+use std::io::{Error, ErrorKind, IoSlice, IoSliceMut, Result};
+use std::os::fd::OwnedFd;
 use std::os::unix::io::AsRawFd;
-use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixDatagram;
-use std::os::unix::prelude::FromRawFd;
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 
@@ -17,11 +16,11 @@ pub struct Socket {
 }
 
 impl Socket {
-    pub fn new(fd: RawFd) -> Result<Socket> {
-        setsockopt(fd, PassCred, &true)?;
-        setsockopt(fd, OobInline, &true)?;
+    pub fn new(fd: OwnedFd) -> Result<Socket> {
+        setsockopt(&fd, PassCred, &true)?;
+        setsockopt(&fd, OobInline, &true)?;
 
-        let socket = unsafe { UnixDatagram::from_raw_fd(fd) };
+        let socket = UnixDatagram::from(fd);
 
         Ok(Socket {
             inner: Arc::new(AsyncFd::new(socket)?),
@@ -75,7 +74,10 @@ impl Socket {
                     Some(&mut cmsg_buf),
                     MsgFlags::MSG_CMSG_CLOEXEC,
                 ) {
-                    Ok(val) => Ok((val.bytes, val.cmsgs().collect())),
+                    Ok(val) => match val.bytes {
+                        0 => Err(Error::from(ErrorKind::BrokenPipe)),
+                        _ => Ok((val.bytes, val.cmsgs()?.collect())),
+                    },
                     Err(Errno::EWOULDBLOCK) => Err(Error::from(ErrorKind::WouldBlock)),
                     Err(e) => Err(Error::from_raw_os_error(e as i32)),
                 }
@@ -130,10 +132,27 @@ mod tests {
         let ret = rx.recvmsg(&mut buf).await;
         assert_eq!(2, ret.unwrap().0);
 
-        let ret = rx.recvmsg(&mut buf).await;
-        assert_eq!(0, ret.unwrap().0);
-
         a.await?;
+
+        let ret = rx.recvmsg(&mut buf).await;
+        assert_eq!(ret.unwrap_err().kind(), ErrorKind::BrokenPipe);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_to_closed_socket() -> Result<()> {
+        let (tx, rx) = Socket::pair()?;
+        drop(rx);
+        let mut buf = [0; 2];
+        let ret = tx
+            .sendmsg(
+                &mut buf,
+                &[ControlMessage::ScmCredentials(&UnixCredentials::new())],
+            )
+            .await;
+
+        assert_eq!(ret.unwrap_err().kind(), ErrorKind::BrokenPipe);
 
         Ok(())
     }
