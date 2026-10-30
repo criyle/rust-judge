@@ -5,14 +5,12 @@ use nix::sys::socket::{
     MsgFlags, SockFlag, SockType,
 };
 use std::io::{Error, ErrorKind, IoSlice, IoSliceMut, Result};
-use std::os::fd::OwnedFd;
-use std::os::unix::io::AsRawFd;
-use std::os::unix::net::UnixDatagram;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 
 pub struct Socket {
-    inner: Arc<AsyncFd<UnixDatagram>>,
+    inner: Arc<AsyncFd<OwnedFd>>,
 }
 
 impl Socket {
@@ -20,10 +18,12 @@ impl Socket {
         setsockopt(&fd, PassCred, &true)?;
         setsockopt(&fd, OobInline, &true)?;
 
-        let socket = UnixDatagram::from(fd);
-
+        // OwnedFd keeps the registered descriptor open and unchanged for the
+        // lifetime of AsyncFd.
         Ok(Socket {
-            inner: Arc::new(AsyncFd::new(socket)?),
+            // SAFETY: `fd` owns a valid descriptor and AsyncFd owns `fd` from
+            // this point on, so its descriptor stays open and unchanged.
+            inner: Arc::new(unsafe { AsyncFd::register(fd)? }),
         })
     }
 
