@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package rust_sandbox.container.v1;
+
+// Container control messages use protobuf instead of Go encoding/gob. The
+// command enum values intentionally retain go-sandbox's command numbers.
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  PING = 1;
+  OPEN = 2;
+  DELETE = 3;
+  RESET = 4;
+  EXEC = 5;
+  OK = 6;
+  KILL = 7;
+  CONFIGURE = 8;
+  SYMLINK = 9;
+}
+
+message Command {
+  CommandType cmd = 1;
+  DeleteCommand delete_cmd = 2;
+  ExecCommand exec_cmd = 3;
+  ConfigureCommand conf_cmd = 4;
+  repeated OpenCommand open_cmd = 5;
+  repeated SymbolicLink symlink_cmd = 6;
+}
+message OpenCommand {
+  string path = 1;
+  int64 flag = 2;
+  uint32 perm = 3;
+  bool mkdir_all = 4;
+}
+message DeleteCommand { string path = 1; }
+message SymbolicLink {
+  string link_path = 1;
+  string target = 2;
+}
+message ResourceLimit {
+  int32 res = 1;
+  ResourceLimitValues rlim = 2;
+}
+message ResourceLimitValues {
+  uint64 cur = 1;
+  uint64 max = 2;
+}
+message FilterInstruction {
+  uint32 code = 1;
+  uint32 jt = 2;
+  uint32 jf = 3;
+  uint32 k = 4;
+}
+message SeccompProgram { repeated FilterInstruction instructions = 1; }
+message ExecCommand {
+  repeated string argv = 1;
+  repeated string env = 2;
+  repeated ResourceLimit rlimits = 3;
+  repeated FilterInstruction seccomp = 4;
+  bool fd_exec = 5;
+  bool fd_cgroup = 6;
+  bool ctty = 7;
+  bool sync_after = 8;
+  repeated SeccompProgram seccomp_programs = 9;
+}
+message ConfigureCommand { ContainerConfig conf = 1; }
+message ContainerConfig {
+  string work_dir = 1;
+  string host_name = 2;
+  string domain_name = 3;
+  string container_root = 4;
+  repeated Mount mounts = 5;
+  repeated SymbolicLink symbolic_links = 6;
+  repeated string mask_paths = 7;
+  repeated string init_command = 8;
+  int32 container_uid = 9;
+  int32 container_gid = 10;
+  bool cred = 11;
+  bool unshare_cgroup = 12;
+  repeated FilterInstruction seccomp = 13;
+  repeated SeccompProgram seccomp_programs = 14;
+}
+message Mount {
+  string source = 1;
+  string target = 2;
+  string fs_type = 3;
+  string data = 4;
+  uint64 flags = 5;
+}
+message Reply {
+  ErrorReply error = 1;
+  ExecReply exec_reply = 2;
+  repeated string batch_errors = 3;
+}
+message ErrorReply {
+  optional int32 errno = 1;
+  string message = 2;
+}
+message ExecReply {
+  int32 exit_status = 1;
+  int32 status = 2;
+  int64 time_ns = 3;
+  uint64 memory_bytes = 4;
+}
