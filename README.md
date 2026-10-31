@@ -58,11 +58,12 @@ Avoid `--no-seccomp` in production. It disables this syscall filter; it does not
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets
+cargo build --bins
 cargo test --lib --bins
 cargo package --no-verify
 ```
 
-The full test suite includes sandbox integration cases that require namespace, mount, and credential operations unavailable to GitHub-hosted runners, even after enabling unprivileged user namespaces. CI skips only those cases listed in [`.github/namespace-test-skips.txt`](.github/namespace-test-skips.txt); run the complete suite on a Linux host that permits the required operations. The opt-in, process-level counterpart to go-judge's basic integration sanity cases can be run with `cargo test --test go_judge_sanity -- --ignored --nocapture`; it executes the server's `/run` API and also requires a host with those sandbox operations. CI checks formatting, linting, compilation, the remaining unit tests, and package contents, including compilation with the declared Rust 1.88 minimum version.
+Sandbox unit and integration tests need the package's helper binaries available beside the test executables, so build them before running the suite. The process-level counterpart to go-judge's basic integration sanity cases can be run with `cargo test --test go_judge_sanity -- --ignored --nocapture`; it executes the server's `/run` API. CI enables unprivileged user namespaces, builds the binaries, runs the complete unit suite and both integration tests, and verifies package contents on stable; Rust 1.88 checks formatting-independent compilation.
 
 See [`BENCHMARKS.md`](BENCHMARKS.md) for benchmark methodology and current measurements. The Rust runner currently uses the standard process-spawn path with setup hooks and does not use Go's optimized `clone3`/`vfork` launch path. If you need a mature service today or depend on that optimized launch behavior, use [upstream go-judge](https://github.com/criyle/go-judge).
 

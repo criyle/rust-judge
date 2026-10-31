@@ -44,18 +44,18 @@ jobs:
           if command -v aa-status >/dev/null 2>&1; then
             sudo aa-status || true
           fi
+      - name: Build binaries for sandbox tests
+        if: matrix.toolchain == 'stable'
+        run: cargo build --locked --bins
       - name: Unit tests (privileged sandbox)
         if: matrix.toolchain == 'stable'
-        run: |
-          mapfile -t namespace_test_skips < .github/namespace-test-skips.txt
-          test_args=()
-          for filter in "${namespace_test_skips[@]}"; do
-            test_args+=(--skip "$filter")
-          done
-          cargo test --locked --lib --bins -- "${test_args[@]}"
+        run: cargo test --locked --lib --bins
       - name: Server integration test
         if: matrix.toolchain == 'stable'
         run: cargo test --locked --test server_smoke
+      - name: Go-judge sanity integration test
+        if: matrix.toolchain == 'stable'
+        run: cargo test --locked --test go_judge_sanity -- --ignored --nocapture
       - name: Verify package contents
         if: matrix.toolchain == 'stable'
         run: cargo package --locked --no-verify

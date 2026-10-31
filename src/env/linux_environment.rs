@@ -1441,9 +1441,15 @@ fn find_container_init() -> io::Result<PathBuf> {
     }
     let current = std::env::current_exe()?;
     #[cfg(test)]
-    if let Some(helper) = find_test_container_init(&current) {
-        return Ok(helper);
+    {
+        return find_test_container_init(&current).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "container-init test helper is missing; build binaries with `cargo build --bins` before running sandbox tests",
+            )
+        });
     }
+    #[cfg(not(test))]
     Ok(resolve_container_init(&current))
 }
 
