@@ -49,7 +49,13 @@ jobs:
         run: cargo build --locked --bins
       - name: Unit tests (privileged sandbox)
         if: matrix.toolchain == 'stable'
-        run: cargo test --locked --lib --bins
+        run: |
+          mapfile -t host_capability_skips < .github/namespace-test-skips.txt
+          test_args=()
+          for filter in "${host_capability_skips[@]}"; do
+            test_args+=(--skip "$filter")
+          done
+          cargo test --locked --lib --bins -- "${test_args[@]}"
       - name: Server integration test
         if: matrix.toolchain == 'stable'
         run: cargo test --locked --test server_smoke

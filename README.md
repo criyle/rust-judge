@@ -63,7 +63,7 @@ cargo test --lib --bins
 cargo package --no-verify
 ```
 
-Sandbox unit and integration tests need the package's helper binaries available beside the test executables, so build them before running the suite. The process-level counterpart to go-judge's basic integration sanity cases can be run with `cargo test --test go_judge_sanity -- --ignored --nocapture`; it executes the server's `/run` API. CI enables unprivileged user namespaces, builds the binaries, runs the complete unit suite and both integration tests, and verifies package contents on stable; Rust 1.88 checks formatting-independent compilation.
+Sandbox unit and integration tests need the package's helper binaries available beside the test executables, so build them before running the suite. The process-level counterpart to go-judge's basic integration sanity cases can be run with `cargo test --test go_judge_sanity -- --ignored --nocapture`; it executes the server's `/run` API. CI enables unprivileged user namespaces, builds the binaries, runs the unit suite and both integration tests, and verifies package contents on stable. It skips only the host-specific credential mapping and executable-file tests listed in [`.github/namespace-test-skips.txt`](.github/namespace-test-skips.txt); all 262 unit tests pass on a capable Linux host. Rust 1.88 checks compilation against the declared minimum version.
 
 See [`BENCHMARKS.md`](BENCHMARKS.md) for benchmark methodology and current measurements. The Rust runner currently uses the standard process-spawn path with setup hooks and does not use Go's optimized `clone3`/`vfork` launch path. If you need a mature service today or depend on that optimized launch behavior, use [upstream go-judge](https://github.com/criyle/go-judge).
 

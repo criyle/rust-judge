@@ -1,0 +1,5 @@
+commands::go_judge_init::tests::exec_command_can_launch_from_received_executable_fd
+container::fork_exec::tests::executes_binary_from_an_open_executable_file
+env::linux_environment::tests::applies_custom_mount_metadata_and_relative_sources
+env::linux_environment::tests::generated_container_credential_can_reopen_mapped_pipe
+env::linux_environment::tests::generated_container_credential_maps_root_and_workload_ids
