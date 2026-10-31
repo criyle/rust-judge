@@ -53,6 +53,9 @@ jobs:
             test_args+=(--skip "$filter")
           done
           cargo test --locked --lib --bins -- "${test_args[@]}"
+      - name: Server integration test
+        if: matrix.toolchain == 'stable'
+        run: cargo test --locked --test server_smoke
       - name: Verify package contents
         if: matrix.toolchain == 'stable'
         run: cargo package --locked --no-verify
