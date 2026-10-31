@@ -32,7 +32,13 @@ jobs:
         run: cargo check --locked --all-targets
       - name: Unit tests
         if: matrix.toolchain == 'stable'
-        run: cargo test --locked --lib --bins
+        run: |
+          mapfile -t namespace_test_skips < .github/namespace-test-skips.txt
+          test_args=()
+          for filter in "${namespace_test_skips[@]}"; do
+            test_args+=(--skip "$filter")
+          done
+          cargo test --locked --lib --bins -- "${test_args[@]}"
       - name: Verify package contents
         if: matrix.toolchain == 'stable'
         run: cargo package --locked --no-verify

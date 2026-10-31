@@ -62,7 +62,7 @@ cargo test --lib --bins
 cargo package --no-verify
 ```
 
-The test suite includes Linux-specific behavior and may require namespace support. CI checks formatting, linting, compilation, unit tests, and package contents on Linux, including the declared Rust 1.88 minimum version.
+The full test suite includes sandbox integration cases that require namespace and mount privileges. GitHub-hosted runners deny those operations, so CI skips only those cases listed in [`.github/namespace-test-skips.txt`](.github/namespace-test-skips.txt); run the complete suite on a Linux host that permits the required namespaces and mounts. CI checks formatting, linting, compilation, the remaining unit tests, and package contents, including compilation with the declared Rust 1.88 minimum version.
 
 See [`BENCHMARKS.md`](BENCHMARKS.md) for benchmark methodology and current measurements. The Rust runner currently uses the standard process-spawn path with setup hooks and does not use Go's optimized `clone3`/`vfork` launch path. If you need a mature service today or depend on that optimized launch behavior, use [upstream go-judge](https://github.com/criyle/go-judge).
 
