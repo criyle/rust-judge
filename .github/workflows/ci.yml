@@ -30,15 +30,23 @@ jobs:
         run: cargo clippy --all-targets
       - name: Compile
         run: cargo check --locked --all-targets
-      - name: Unit tests
+      - name: Enable unprivileged user namespaces
         if: matrix.toolchain == 'stable'
         run: |
-          mapfile -t namespace_test_skips < .github/namespace-test-skips.txt
-          test_args=()
-          for filter in "${namespace_test_skips[@]}"; do
-            test_args+=(--skip "$filter")
-          done
-          cargo test --locked --lib --bins -- "${test_args[@]}"
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user true
+          echo "--- kernel security state ---"
+          uname -a
+          grep -E '^(Seccomp|Seccomp_filters):' /proc/self/status
+          if command -v aa-status >/dev/null 2>&1; then
+            sudo aa-status || true
+          fi
+      - name: Unit tests
+        if: matrix.toolchain == 'stable'
+        run: cargo test --locked --lib --bins
       - name: Verify package contents
         if: matrix.toolchain == 'stable'
         run: cargo package --locked --no-verify
