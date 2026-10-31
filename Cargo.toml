@@ -4,6 +4,12 @@ version = "0.1.0"
 authors = ["criyle <gaoyang4425@gmail.com>"]
 edition = "2024"
 rust-version = "1.88"
+description = "Linux sandbox service and Rust library for running programs with resource limits"
+license = "MIT"
+repository = "https://github.com/criyle/rust-judge"
+readme = "README.md"
+keywords = ["sandbox", "judge", "execution", "seccomp"]
+categories = ["development-tools", "web-programming"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

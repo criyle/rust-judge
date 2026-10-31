@@ -9,7 +9,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("go-judge-grpc-proxy: {error}\n{USAGE}");
+            eprintln!("rust-judge-grpc-proxy: {error}\n{USAGE}");
             ExitCode::from(2)
         }
         Ok(config) => match tokio::runtime::Builder::new_multi_thread()
@@ -19,12 +19,12 @@ fn main() -> ExitCode {
             Ok(runtime) => match runtime.block_on(serve(config)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
-                    eprintln!("go-judge-grpc-proxy: {error}");
+                    eprintln!("rust-judge-grpc-proxy: {error}");
                     ExitCode::from(1)
                 }
             },
             Err(error) => {
-                eprintln!("go-judge-grpc-proxy: cannot start runtime: {error}");
+                eprintln!("rust-judge-grpc-proxy: cannot start runtime: {error}");
                 ExitCode::from(1)
             }
         },

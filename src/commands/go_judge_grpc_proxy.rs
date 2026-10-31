@@ -95,7 +95,7 @@ impl ProxyConfig {
     }
 }
 
-pub const USAGE: &str = "Usage: go-judge-grpc-proxy [-addr=:7755] [-srvaddr=localhost:5051]\n";
+pub const USAGE: &str = "Usage: rust-judge-grpc-proxy [-addr=:7755] [-srvaddr=localhost:5051]\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(i32)]

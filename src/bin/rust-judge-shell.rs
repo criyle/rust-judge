@@ -18,14 +18,14 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Err(error) => {
-            eprintln!("go-judge-shell: {error}\n{USAGE}");
+            eprintln!("rust-judge-shell: {error}\n{USAGE}");
             return ExitCode::from(2);
         }
     };
     match run(config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("go-judge-shell: {error}");
+            eprintln!("rust-judge-shell: {error}");
             ExitCode::from(1)
         }
     }
@@ -130,7 +130,7 @@ fn start_stdin_pump(transport: Arc<dyn ShellTransport>) {
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                     Err(e) => {
-                        eprintln!("go-judge-shell: stdin: {e}");
+                        eprintln!("rust-judge-shell: stdin: {e}");
                         break;
                     }
                 }
@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn cli_arg_parser_keeps_shell_args() {
         let config = ShellConfig::parse(
-            ["go-judge-shell", "--", "sh", "-lc", "echo ok"],
+            ["rust-judge-shell", "--", "sh", "-lc", "echo ok"],
             "",
             "xterm",
         )

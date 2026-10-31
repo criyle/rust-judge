@@ -1,4 +1,4 @@
-//! CLI and environment configuration for the `go-judge` server entrypoint.
+//! CLI and environment configuration for the `rust-judge` server entrypoint.
 //!
 //! The Go server's HTTP/gRPC wiring depends on Gin, gRPC, Prometheus and the
 //! full environment backend. This module translates its configuration surface
@@ -171,7 +171,7 @@ impl Config {
             set_value(&mut config, name, &value, false)?;
             index += 1;
         }
-        // go-judge is a server and accepts no positional command; the Go
+        // rust-judge is a server and accepts no positional command; the Go
         // flag package leaves trailing positional values unused as well.
         if config.parallelism == 0 {
             config.parallelism = cpu_count.max(1);
@@ -180,7 +180,7 @@ impl Config {
     }
 }
 
-pub const USAGE: &str = r#"Usage: go-judge [options]
+pub const USAGE: &str = r#"Usage: rust-judge [options]
 Starts the HTTP executor server (optional gRPC and metrics endpoints).
 
 Options use kebab-case names; settings can also be supplied as ES_<UPPER_SNAKE_CASE> environment variables.
@@ -400,7 +400,7 @@ mod tests {
             ("ES_SRC_PREFIX".into(), "/a,/b".into()),
         ]);
         let args = [
-            "go-judge",
+            "rust-judge",
             "-enableGrpc",
             "-http-addr",
             "localhost:9090",
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn comma_separated_cli_lists_match_go_string_slice_flags() {
         let ParseOutcome::Config(config) = Config::parse_from(
-            ["go-judge", "--cpuset", "0,1,2,3", "--src-prefix=/a,/b"],
+            ["rust-judge", "--cpuset", "0,1,2,3", "--src-prefix=/a,/b"],
             &HashMap::new(),
             5,
             2,
@@ -435,17 +435,20 @@ mod tests {
     #[test]
     fn nonpositive_parallelism_falls_back_to_logical_cpu_count() {
         for value in ["0", "-1"] {
-            let ParseOutcome::Config(config) =
-                Config::parse_from(["go-judge", "--parallelism", value], &HashMap::new(), 5, 6)
-                    .unwrap()
-            else {
+            let ParseOutcome::Config(config) = Config::parse_from(
+                ["rust-judge", "--parallelism", value],
+                &HashMap::new(),
+                5,
+                6,
+            )
+            .unwrap() else {
                 panic!();
             };
             assert_eq!(config.parallelism, 6);
         }
 
         let env = HashMap::from([("ES_PARALLELISM".into(), "-3".into())]);
-        let ParseOutcome::Config(config) = Config::parse_from(["go-judge"], &env, 5, 9).unwrap()
+        let ParseOutcome::Config(config) = Config::parse_from(["rust-judge"], &env, 5, 9).unwrap()
         else {
             panic!();
         };
@@ -455,7 +458,7 @@ mod tests {
     #[test]
     fn negative_file_timeout_disables_expiration_like_go() {
         let ParseOutcome::Config(config) = Config::parse_from(
-            ["go-judge", "--file-timeout", "-30s"],
+            ["rust-judge", "--file-timeout", "-30s"],
             &HashMap::new(),
             5,
             1,
@@ -466,7 +469,7 @@ mod tests {
         assert_eq!(config.file_timeout, Duration::ZERO);
 
         let env = HashMap::from([("ES_FILE_TIMEOUT".into(), "-1m".into())]);
-        let ParseOutcome::Config(config) = Config::parse_from(["go-judge"], &env, 5, 1).unwrap()
+        let ParseOutcome::Config(config) = Config::parse_from(["rust-judge"], &env, 5, 1).unwrap()
         else {
             panic!();
         };
@@ -476,16 +479,16 @@ mod tests {
     #[test]
     fn help_defaults_and_bad_values_are_reported() {
         assert_eq!(
-            Config::parse_from(["go-judge", "--help"], &HashMap::new(), 3, 1).unwrap(),
+            Config::parse_from(["rust-judge", "--help"], &HashMap::new(), 3, 1).unwrap(),
             ParseOutcome::Help
         );
         assert!(matches!(
-            Config::parse_from(["go-judge"], &HashMap::new(), 3, 1).unwrap(),
+            Config::parse_from(["rust-judge"], &HashMap::new(), 3, 1).unwrap(),
             ParseOutcome::Config(_)
         ));
         assert!(
             Config::parse_from(
-                ["go-judge", "-pre-fork", "bad", "--", "x"],
+                ["rust-judge", "-pre-fork", "bad", "--", "x"],
                 &HashMap::new(),
                 3,
                 1
@@ -493,7 +496,8 @@ mod tests {
             .is_err()
         );
         assert!(
-            Config::parse_from(["go-judge", "-unknown", "--", "x"], &HashMap::new(), 3, 1).is_err()
+            Config::parse_from(["rust-judge", "-unknown", "--", "x"], &HashMap::new(), 3, 1)
+                .is_err()
         );
     }
 

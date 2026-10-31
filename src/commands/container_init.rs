@@ -1,4 +1,4 @@
-//! PID-namespace init helper used by the production `go-judge` executable.
+//! PID-namespace init helper used by the production `rust-judge` executable.
 //!
 //! `unshare --pid --fork --mount-proc` starts this program as PID 1. It loads
 //! the prebuilt seccomp filter only after util-linux completed namespace and

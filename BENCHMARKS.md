@@ -88,13 +88,13 @@ above do not quantify that production-scale effect. Rust's benchmark now has
 Implementation parity work and benchmark analysis were assisted by OpenAI
 Codex, in collaboration with the project maintainer.
 
-The warm container benchmark must re-execute the production `go-judge`
+The warm container benchmark must re-execute the production `rust-judge`
 executable as PID 1. Build it and point the init override at that binary before
 running the Criterion suite:
 
 ```sh
-cargo build --release --bin go-judge
-export RUST_SANDBOX_CONTAINER_INIT="$PWD/target/release/go-judge"
+cargo build --release --bin rust-judge
+export RUST_SANDBOX_CONTAINER_INIT="$PWD/target/release/rust-judge"
 cargo bench --bench sandbox
 ```
 
@@ -144,7 +144,7 @@ resolved directly below each controller mount, matching go-judge's
 `/sys/fs/cgroup/<controller>/<prefix>` paths instead of nesting below the
 server's current membership. Fixture tests cover both path rules. The full
 Rust suite passed (248 library tests,
-4 go-judge binary tests, and 1 shell binary test), and the Go integration
+4 rust-judge binary tests, and 1 shell binary test), and the Go integration
 package passed against the rebuilt release server. This host
 has no writable delegated cgroup, so runtime placement into that hierarchy
 still requires validation on a host with writable delegation.
@@ -234,7 +234,7 @@ the end-to-end check; its elapsed time also includes compilation, HTTP, and
 test setup.
 
 That earlier 0.63 ms result was not reproduced with the current tree. With
-`RUST_SANDBOX_CONTAINER_INIT` pointing at the release `go-judge`, the warm
+`RUST_SANDBOX_CONTAINER_INIT` pointing at the release `rust-judge`, the warm
 container benchmark measured 1.028 ms/op (100 samples; 95% interval 1.022–1.034
 ms), then 1.049 ms/op in a shorter repeat. The standalone init alias measured
 1.007 ms/op in the same short-run setup, so the production self-init path does
@@ -612,7 +612,7 @@ seconds (46.6 seconds before), and the full Rust integration package passed in
 
 ## Production container init executable
 
-The release `go-judge` executable now re-executes itself as PID 1 with
+The release `rust-judge` executable now re-executes itself as PID 1 with
 `container_init`, matching Go's `/proc/self/exe` launch. The parent passes a
 `SOCK_SEQPACKET` control socket as fd 3. PID 1 receives Configure, Exec, and
 Kill requests over the Rust protobuf IPC and starts, monitors, and reaps
@@ -628,7 +628,7 @@ I verified the production identity at runtime while a workload kept the
 namespace alive: `/proc/<host-pid-of-container-init>/exe` and the server's
 `/proc/<server-pid>/exe` had the same device and inode (`64539:2005690`). The
 reported init path is `/.rust-sandbox-init`, the in-container bind-mount name
-for that same running `go-judge` executable.
+for that same running `rust-judge` executable.
 
 Cleanup after each workload keeps Go's namespace-wide `waitAll` behavior when
 the re-executed server is PID 1. Test-only in-process calls to the init
@@ -927,10 +927,10 @@ integration package passed against the release self-init server in 110.2
 seconds after this protocol alignment (`go test -tags integration -count=1 .`,
 2026-10-30).
 
-The production `go-judge` PID 1 dispatch now always enters the persistent
+The production `rust-judge` PID 1 dispatch now always enters the persistent
 container control server; standalone helper flags cannot divert it to the
 `container-init` CLI. A live smoke request returned `Accepted`, and the init
-process's executable device/inode matched the running release `go-judge` binary.
+process's executable device/inode matched the running release `rust-judge` binary.
 Go's systemd cgroup path moves the server into `gojudge.scope/api` and keeps
 `containers` as its sibling; only the no-systemd fallback uses the nested
 `init` child. Rust now follows both paths, requests a delegated transient scope
@@ -947,7 +947,7 @@ passed in 36.9 seconds after these changes
 Revalidated the production init path with the rebuilt release binary. During
 the Go integration run, namespace PID 1 had argv `/.rust-sandbox-init
 container_init` and its `/proc/<host-pid>/exe` had the same device, inode, and
-SHA-256 as `target/release/go-judge`; no standalone init executable was used.
+SHA-256 as `target/release/rust-judge`; no standalone init executable was used.
 The full Go integration package passed in 37.5 seconds, and the serial Rust
 test suite passed (252 library tests plus all binary and doc tests). One
 parallel Rust test run had a transient Unix-socket reset in the executable-fd
@@ -1119,7 +1119,7 @@ The Go container init calls `chdir(WorkDir)` before executing the init command.
 Rust PID 1 now does the same after configuring `/w`, which also preserves the
 base directory for relative control operations such as Open, Delete, and
 Symlink. A live `/proc` inspection during integration testing confirmed each
-inspected production `go-judge` process had namespace PID 1 and a host-visible
+inspected production `rust-judge` process had namespace PID 1 and a host-visible
 cwd ending in its container's `/w`. The default-seccomp full Go integration
 package passed again in 37.2 seconds on 2026-10-30. `cargo fmt --check`, the
 serial Rust unit/binary tests (255 library and 7 binary tests), the release

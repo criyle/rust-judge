@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Rust ${{ matrix.toolchain }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, "1.88.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        if: matrix.toolchain == 'stable'
+        run: cargo fmt --all -- --check
+      - name: Lint
+        if: matrix.toolchain == 'stable'
+        run: cargo clippy --all-targets
+      - name: Compile
+        run: cargo check --locked --all-targets
+      - name: Unit tests
+        if: matrix.toolchain == 'stable'
+        run: cargo test --locked --lib --bins
+      - name: Verify package contents
+        if: matrix.toolchain == 'stable'
+        run: cargo package --locked --no-verify

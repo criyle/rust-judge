@@ -2,7 +2,7 @@
 //!
 //! The launcher uses `std::process::Command` through `container::fork_exec`.
 //! It requires permission to create mount namespaces and bind mounts. The
-//! production go-judge executable is re-executed as PID 1 and workload
+//! production rust-judge executable is re-executed as PID 1 and workload
 //! commands are sent to it over the container control socket.
 
 use crate::container::{
@@ -349,7 +349,7 @@ impl LinuxEnvironment {
             let helper_target = root.join(helper_inside.trim_start_matches('/'));
             // The namespace runner overlays a fresh tmpfs on `root` and then
             // creates bind-mount targets inside that tmpfs. Pre-copying the
-            // full go-judge executable here would be discarded by the overlay.
+            // full rust-judge executable here would be discarded by the overlay.
             mounts.push(BindMount {
                 source: cstring_path(&helper_source)?,
                 target: cstring_path(&helper_target)?,
@@ -499,7 +499,7 @@ impl LinuxEnvironment {
         let init_fd = init_socket.as_raw_fd();
         let helper_args = vec![cstring("container_init")?];
         let mut runner = self.namespace_runner(helper_inside, helper_args);
-        // Match go-sandbox/container: the re-executed go-judge binary is PID 1
+        // Match go-sandbox/container: the re-executed rust-judge binary is PID 1
         // and receives its SOCK_SEQPACKET control channel at fd 3. Keep the
         // inherited standard descriptors in place before mapping the socket.
         runner.fd_map = vec![0, 1, 2, init_fd];
@@ -702,7 +702,7 @@ impl LinuxEnvironment {
         self.helper_inside.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "container-init executable missing; build go-judge or container-init, or set RUST_SANDBOX_CONTAINER_INIT",
+                "container-init executable missing; build rust-judge or container-init, or set RUST_SANDBOX_CONTAINER_INIT",
             )
         })?;
         if param.args.is_empty() {
@@ -1442,8 +1442,8 @@ fn find_container_init() -> io::Result<PathBuf> {
 
 /// Go's container.Builder defaults ExecFile to `/proc/self/exe`, which
 /// re-executes the production server as the container PID 1. Rust cannot run
-/// package init hooks, so the `go-judge` binary dispatches `container_init`
-/// before starting its server (see `src/bin/go-judge.rs`). Keep this resolver
+/// package init hooks, so the `rust-judge` binary dispatches `container_init`
+/// before starting its server (see `src/bin/rust-judge.rs`). Keep this resolver
 /// identical to Go's default; standalone helpers are explicit overrides only.
 fn resolve_container_init(current: &Path) -> PathBuf {
     current.to_owned()
@@ -2080,7 +2080,7 @@ mod tests {
     #[test]
     fn production_container_init_defaults_to_the_current_executable() {
         // Go uses /proc/self/exe, independent of the executable's filename.
-        let executable = Path::new("/opt/bin/go-judge-custom-name");
+        let executable = Path::new("/opt/bin/rust-judge-custom-name");
         assert_eq!(resolve_container_init(executable), executable);
     }
 

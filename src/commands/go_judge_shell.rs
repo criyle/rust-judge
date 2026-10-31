@@ -829,7 +829,7 @@ fn json_response(v: serde_json::Value) -> io::Result<worker::Response> {
     Ok(response)
 }
 
-pub const USAGE: &str = "Usage: go-judge-shell [options] [command args...]\nOptions: -transport=websocket|grpc -ws-url URL -grpc-addr ADDR -copy-in-dir DIR\n";
+pub const USAGE: &str = "Usage: rust-judge-shell [options] [command args...]\nOptions: -transport=websocket|grpc -ws-url URL -grpc-addr ADDR -copy-in-dir DIR\n";
 
 /// Protobuf conversion surface used by the future gRPC transport.
 pub fn exec_request(plan: ShellExecutionPlan) -> pb::Request {
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn defaults_and_transport_options_match_go_shell() {
-        let config = ShellConfig::parse(["go-judge-shell"], "secret", "xterm").unwrap();
+        let config = ShellConfig::parse(["rust-judge-shell"], "secret", "xterm").unwrap();
         assert_eq!(config.websocket_url, "ws://localhost:5050/stream");
         assert_eq!(config.grpc_addr, "localhost:5051");
         assert_eq!(config.args, ["/bin/bash"]);

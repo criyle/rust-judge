@@ -12,14 +12,14 @@ use std::{collections::HashMap, net::ToSocketAddrs, process::ExitCode, sync::Arc
 
 fn main() -> ExitCode {
     let arguments = std::env::args_os().collect::<Vec<_>>();
-    // Match go-judge's package init hook: the production server executable is
+    // Match rust-judge's package init hook: the production server executable is
     // re-executed as each container's PID 1 and runs the container control
     // loop here. Do not route production containers through a helper binary.
     if is_container_init_invocation(unsafe { libc::getpid() }, &arguments) {
         return match rust_judge::commands::go_judge_init::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("go-judge container_init: {error}");
+                eprintln!("rust-judge container_init: {error}");
                 ExitCode::from(2)
             }
         };
@@ -44,12 +44,12 @@ fn main() -> ExitCode {
         Ok(ParseOutcome::Config(config)) => match run(config) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("go-judge: {error}");
+                eprintln!("rust-judge: {error}");
                 ExitCode::from(1)
             }
         },
         Err(error) => {
-            eprintln!("go-judge: {error}\n{USAGE}");
+            eprintln!("rust-judge: {error}\n{USAGE}");
             ExitCode::from(2)
         }
     }
@@ -136,7 +136,7 @@ fn run(mut config: Config) -> std::io::Result<()> {
         let systemd_scope_started = match scoped {
             Ok(started) => started,
             Err(error) if unsafe { libc::getuid() } != 0 && !config.no_fallback => {
-                eprintln!("go-judge: systemd scope unavailable, using current cgroup: {error}");
+                eprintln!("rust-judge: systemd scope unavailable, using current cgroup: {error}");
                 false
             }
             Err(error) => return Err(std::io::Error::other(error)),
@@ -460,9 +460,9 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn production_container_init_defaults_to_the_go_judge_executable() {
+    fn production_container_init_defaults_to_the_rust_judge_executable() {
         let ParseOutcome::Config(config) =
-            Config::parse_from(["go-judge"], &HashMap::new(), 1, 1).unwrap()
+            Config::parse_from(["rust-judge"], &HashMap::new(), 1, 1).unwrap()
         else {
             panic!("expected config");
         };
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn go_judge_pid1_always_uses_the_persistent_container_server() {
         let arguments = [
-            "go-judge".into(),
+            "rust-judge".into(),
             "container_init".into(),
             "--exec-direct".into(),
         ];
@@ -483,7 +483,7 @@ mod tests {
         assert!(!is_container_init_invocation(2, &arguments));
         assert!(!is_container_init_invocation(
             1,
-            &["go-judge".into(), "--version".into()]
+            &["rust-judge".into(), "--version".into()]
         ));
     }
 
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn explicit_container_init_path_still_overrides_the_executable() {
         let ParseOutcome::Config(config) = Config::parse_from(
-            ["go-judge", "--container-init-path", "/opt/custom-init"],
+            ["rust-judge", "--container-init-path", "/opt/custom-init"],
             &HashMap::new(),
             1,
             1,

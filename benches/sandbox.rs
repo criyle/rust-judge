@@ -596,9 +596,11 @@ fn envexec_pipe_stream(c: &mut Criterion) {
                     }
                     .run()
                     .expect("run pipe benchmark group");
-                    assert!(results.iter().all(|result| {
-                        result.status == rust_judge::envexec::Status::Accepted
-                    }));
+                    assert!(
+                        results.iter().all(|result| {
+                            result.status == rust_judge::envexec::Status::Accepted
+                        })
+                    );
                     black_box(results);
                 });
             });
@@ -661,9 +663,11 @@ fn envexec_pipe_interactive(c: &mut Criterion) {
                     }
                     .run()
                     .expect("run interactive pipe benchmark group");
-                    assert!(results.iter().all(|result| {
-                        result.status == rust_judge::envexec::Status::Accepted
-                    }));
+                    assert!(
+                        results.iter().all(|result| {
+                            result.status == rust_judge::envexec::Status::Accepted
+                        })
+                    );
                     black_box(results);
                 });
             });
