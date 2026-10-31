@@ -190,17 +190,24 @@ impl crate::worker::EnvironmentPool for LinuxEnvironmentPool {
             None => {
                 let mut config = self.config.clone();
                 if config.container_cred_start.is_some() {
-                    let previous = self
-                        .next_credential_id
-                        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                            current.checked_add(1)
-                        })
-                        .map_err(|_| {
+                    let mut previous = self.next_credential_id.load(Ordering::Acquire);
+                    loop {
+                        let next = previous.checked_add(1).ok_or_else(|| {
                             io::Error::new(
                                 io::ErrorKind::InvalidInput,
                                 "container credential ID range overflow",
                             )
                         })?;
+                        match self.next_credential_id.compare_exchange_weak(
+                            previous,
+                            next,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        ) {
+                            Ok(_) => break,
+                            Err(actual) => previous = actual,
+                        }
+                    }
                     config.host_credential_id = Some(previous + 1);
                 }
                 Arc::new(LinuxEnvironment::build(config)?)

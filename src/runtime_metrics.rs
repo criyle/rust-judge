@@ -42,9 +42,18 @@ pub fn environment_released() {
     if !is_enabled() {
         return;
     }
-    let _ = ENVIRONMENTS_IN_USE.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-        Some(value.saturating_sub(1))
-    });
+    let mut current = ENVIRONMENTS_IN_USE.load(Ordering::Relaxed);
+    while current > 0 {
+        match ENVIRONMENTS_IN_USE.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 pub fn environment_counts() -> (u64, u64) {
