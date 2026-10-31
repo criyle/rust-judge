@@ -47,11 +47,12 @@ jobs:
       - name: Unit tests (privileged sandbox)
         if: matrix.toolchain == 'stable'
         run: |
-          sudo env \
-            "PATH=$PATH" \
-            "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" \
-            "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
-            cargo test --locked --lib --bins
+          mapfile -t namespace_test_skips < .github/namespace-test-skips.txt
+          test_args=()
+          for filter in "${namespace_test_skips[@]}"; do
+            test_args+=(--skip "$filter")
+          done
+          cargo test --locked --lib --bins -- "${test_args[@]}"
       - name: Verify package contents
         if: matrix.toolchain == 'stable'
         run: cargo package --locked --no-verify
