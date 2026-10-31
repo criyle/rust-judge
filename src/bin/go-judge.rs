@@ -1,5 +1,5 @@
-use rust_sandbox::go_judge_config::{Config, ParseOutcome, USAGE};
-use rust_sandbox::{
+use rust_judge::go_judge_config::{Config, ParseOutcome, USAGE};
+use rust_judge::{
     env::linux_environment::{
         LinuxEnvironmentConfig, LinuxEnvironmentPool, current_cgroup_v2_path,
         default_cgroup_v1_roots, default_cgroup_v2_root,
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
     // re-executed as each container's PID 1 and runs the container control
     // loop here. Do not route production containers through a helper binary.
     if is_container_init_invocation(unsafe { libc::getpid() }, &arguments) {
-        return match rust_sandbox::commands::go_judge_init::run() {
+        return match rust_judge::commands::go_judge_init::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("go-judge container_init: {error}");
@@ -86,8 +86,8 @@ fn run(mut config: Config) -> std::io::Result<()> {
             "the container environment is currently Linux-only",
         ));
     }
-    rust_sandbox::runtime_metrics::set_enabled(config.enable_metrics);
-    rust_sandbox::runtime_trace::set_schedule_latency_enabled(config.enable_debug);
+    rust_judge::runtime_metrics::set_enabled(config.enable_metrics);
+    rust_judge::runtime_trace::set_schedule_latency_enabled(config.enable_debug);
     if config.enable_debug {
         rpprof::alloc::start();
     }
@@ -116,7 +116,7 @@ fn run(mut config: Config) -> std::io::Result<()> {
     environment_config.no_seccomp = config.no_seccomp;
     environment_config.container_init_path = Some(container_init_executable(&config)?);
     environment_config.mount_config = if std::path::Path::new(&config.mount_conf).is_file() {
-        Some(rust_sandbox::env::read_mount_config(&config.mount_conf)?)
+        Some(rust_judge::env::read_mount_config(&config.mount_conf)?)
     } else {
         None
     };
@@ -129,7 +129,7 @@ fn run(mut config: Config) -> std::io::Result<()> {
         // Match Go's v2 setup: ask systemd to place this server in a delegated
         // transient scope, falling back to the caller's current subtree when
         // no bus connection is available.
-        let scoped = rust_sandbox::tokio_runtime::runtime().block_on(start_systemd_scope(
+        let scoped = rust_judge::tokio_runtime::runtime().block_on(start_systemd_scope(
             &config.cgroup_prefix,
             std::process::id(),
         ));
@@ -153,9 +153,9 @@ fn run(mut config: Config) -> std::io::Result<()> {
             .map(|available| go_cgroup_controller_names(&available))
             .unwrap_or_default();
         let prepared = if systemd_scope_started {
-            rust_sandbox::env::linuxcontainer::prepare_cgroup_v2_systemd_scope(&current, &root)
+            rust_judge::env::linuxcontainer::prepare_cgroup_v2_systemd_scope(&current, &root)
         } else {
-            rust_sandbox::env::linuxcontainer::prepare_cgroup_v2_hierarchy(&current, &root)
+            rust_judge::env::linuxcontainer::prepare_cgroup_v2_hierarchy(&current, &root)
         };
         match prepared {
             Ok(()) => {
@@ -171,7 +171,7 @@ fn run(mut config: Config) -> std::io::Result<()> {
         }
     } else {
         let roots = default_cgroup_v1_roots(&config.cgroup_prefix)?;
-        match rust_sandbox::env::cgroup_v1::prepare_go_judge_hierarchy(&roots) {
+        match rust_judge::env::cgroup_v1::prepare_go_judge_hierarchy(&roots) {
             Ok(()) => environment_config.cgroup_v1_roots = Some(roots),
             Err(_) if unsafe { libc::getuid() } != 0 && !config.no_fallback => {}
             Err(error) => {
@@ -191,7 +191,7 @@ fn run(mut config: Config) -> std::io::Result<()> {
         // `container_cred_start` is the host-side UID/GID allocation base.
         // Go's workload identity comes from the container metadata, which
         // defaults to UID/GID 1000 and may be overridden by mount.yaml.
-        let meta = rust_sandbox::env::container_meta(environment_config.mount_config.as_ref())?;
+        let meta = rust_judge::env::container_meta(environment_config.mount_config.as_ref())?;
         environment_config.uid = u32::try_from(meta.uid).map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -217,19 +217,19 @@ fn run(mut config: Config) -> std::io::Result<()> {
     if config.pre_fork > 0 {
         let mut preforked = Vec::with_capacity(config.pre_fork as usize);
         for _ in 0..config.pre_fork {
-            let environment = rust_sandbox::worker::EnvironmentPool::get(environments.as_ref())?;
-            rust_sandbox::runtime_metrics::environment_acquired();
+            let environment = rust_judge::worker::EnvironmentPool::get(environments.as_ref())?;
+            rust_judge::runtime_metrics::environment_acquired();
             preforked.push(environment);
         }
         for environment in preforked {
-            rust_sandbox::worker::EnvironmentPool::put(environments.as_ref(), environment);
-            rust_sandbox::runtime_metrics::environment_released();
+            rust_judge::worker::EnvironmentPool::put(environments.as_ref(), environment);
+            rust_judge::runtime_metrics::environment_released();
         }
     }
 
     let mut worker_config = WorkerConfig::new(files.clone(), environments);
     if config.enable_metrics {
-        worker_config.exec_observer = Some(Arc::new(rust_sandbox::server::observe_execution));
+        worker_config.exec_observer = Some(Arc::new(rust_judge::server::observe_execution));
     }
     worker_config.parallelism = config.parallelism.max(1);
     worker_config.tick_interval = config.time_limit_checker_interval;
@@ -262,9 +262,9 @@ fn run(mut config: Config) -> std::io::Result<()> {
     } else {
         None
     };
-    let runtime = rust_sandbox::tokio_runtime::runtime();
+    let runtime = rust_judge::tokio_runtime::runtime();
     let memory_reclaimer =
-        rust_sandbox::memory_reclaimer::spawn(config.force_gc_interval, config.force_gc_target.0)?;
+        rust_judge::memory_reclaimer::spawn(config.force_gc_interval, config.force_gc_target.0)?;
     let result = runtime.block_on(serve_with_monitor(http, grpc, monitor, state));
     if let Some(task) = memory_reclaimer {
         task.abort();
@@ -375,12 +375,12 @@ fn runner_config_json(
     environment: &LinuxEnvironmentConfig,
 ) -> std::io::Result<serde_json::Value> {
     let cwd = std::env::current_dir()?;
-    let prepared = rust_sandbox::env::prepare_mount_config(
+    let prepared = rust_judge::env::prepare_mount_config(
         environment.mount_config.as_ref(),
         &cwd,
         &environment.tmpfs_data,
     )?;
-    let mounts = rust_sandbox::env::to_mount_builder(&rust_sandbox::env::filter_missing_sources(
+    let mounts = rust_judge::env::to_mount_builder(&rust_judge::env::filter_missing_sources(
         prepared.mounts,
     ));
     let mount_values: Vec<_> = mounts
@@ -401,7 +401,7 @@ fn runner_config_json(
         .iter()
         .map(|link| serde_json::json!({"LinkPath": link.link_path, "Target": link.target}))
         .collect();
-    let meta = rust_sandbox::env::container_meta(environment.mount_config.as_ref())?;
+    let meta = rust_judge::env::container_meta(environment.mount_config.as_ref())?;
     let (cgroup_type, cgroup_controllers) = if environment.cgroup_root.is_some() {
         (2, environment.cgroup_v2_controllers.clone())
     } else if let Some(roots) = environment.cgroup_v1_roots.as_ref() {
@@ -456,7 +456,7 @@ mod tests {
         Config, LinuxEnvironmentConfig, container_init_executable, go_cgroup_controller_names,
         is_container_init_invocation, logical_cpu_count, runner_config_json,
     };
-    use rust_sandbox::go_judge_config::ParseOutcome;
+    use rust_judge::go_judge_config::ParseOutcome;
     use std::collections::HashMap;
 
     #[test]

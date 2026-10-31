@@ -422,6 +422,10 @@ impl Runner {
     /// `Command` is used instead of implementing a Rust-side fork path: it
     /// provides the standard library's async-signal-safe child setup sequence
     /// and reports any `pre_exec` or `execve` failure to this process.
+    /// On the tested Linux toolchain, registering this `pre_exec` hook selects
+    /// ordinary `clone`/fork; it does not use `std::process::Command`'s plain
+    /// spawn `clone3(CLONE_VM | CLONE_VFORK)` fast path. See BENCHMARKS.md before
+    /// treating this Runner as a vfork/clone3 launch.
     pub fn start(&mut self) -> Result<Child> {
         // Use one helper process followed by the payload spawn, avoiding the
         // extra nsenter and chroot execs. TTY setup has already happened in

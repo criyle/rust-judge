@@ -1,4 +1,4 @@
-use rust_sandbox::commands::go_judge_shell::{
+use rust_judge::commands::go_judge_shell::{
     ShellConfig, ShellConfigError, ShellRequest, ShellResponse, ShellTransport, USAGE, connect,
     exec_shell_request,
 };
@@ -84,7 +84,7 @@ impl Drop for RawTerminal {
 }
 
 fn start_stdin_pump(transport: Arc<dyn ShellTransport>) {
-    rust_sandbox::tokio_runtime::runtime()
+    rust_judge::tokio_runtime::runtime()
         .handle()
         .spawn(async move {
             use tokio::io::AsyncReadExt;
@@ -140,7 +140,7 @@ fn start_stdin_pump(transport: Arc<dyn ShellTransport>) {
 
 fn start_resize_pump(transport: Arc<dyn ShellTransport>) {
     #[cfg(unix)]
-    rust_sandbox::tokio_runtime::runtime().handle().spawn(async move {
+    rust_judge::tokio_runtime::runtime().handle().spawn(async move {
             let Ok(mut resize) =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
             else {

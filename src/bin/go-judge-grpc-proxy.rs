@@ -1,4 +1,4 @@
-use rust_sandbox::commands::go_judge_grpc_proxy::{ProxyConfig, ProxyConfigError, USAGE, serve};
+use rust_judge::commands::go_judge_grpc_proxy::{ProxyConfig, ProxyConfigError, USAGE, serve};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

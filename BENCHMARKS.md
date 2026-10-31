@@ -1,5 +1,90 @@
 # Benchmarks
 
+## Launch-path correction — 2026-10-30
+
+Do not infer the production `Runner` clone mode from a plain
+`std::process::Command` probe. On the tested toolchain, plain `Command` uses
+`clone3(CLONE_VM | CLONE_VFORK | CLONE_CLEAR_SIGHAND)`, but `Runner` registers a
+`pre_exec` hook and uses ordinary `clone` without `CLONE_VM` or `CLONE_VFORK`.
+The Go `Runner` uses `clone` or `clone3` with `CLONE_VM | CLONE_VFORK` when
+parent coordination is not needed. This was verified by tracing each launch
+path.
+
+Earlier benchmark notes that attribute most of the Rust/Go gap to Go's
+`CLONE_INTO_CGROUP` placement are not established by that ablation. Disabling
+Go's `clone3` cgroup placement still leaves Go's vfork path enabled, so that
+test measures the cgroup-placement benefit within Go; it does not isolate the
+Rust fork-versus-vfork difference. Treat these as separate optimizations.
+Future launch comparisons should inspect the actual `Runner` clone flags and
+keep `pre_exec` in the measured path.
+
+## 2026-10-30 std process creation baseline
+
+An initial `strace` of a minimal `std::process::Command` spawn showed this
+toolchain using `clone3(CLONE_VM | CLONE_VFORK | CLONE_CLEAR_SIGHAND)`. That
+does not describe the production `Runner` path: registering its `pre_exec`
+hook makes Rust's standard library use ordinary `clone` without
+`CLONE_VM | CLONE_VFORK`. Go's custom fork/exec path keeps those flags when it
+can use its raw child setup. Go additionally uses `CLONE_INTO_CGROUP` when a
+cgroup FD is supplied; Rust currently enrolls through `cgroup.procs`.
+
+The direct Criterion ablation (`cargo bench --bench sandbox --
+forkexec/bin_true --sample-size 20 --warm-up-time 1 --measurement-time 2`)
+measured:
+
+| Path | Time/op |
+| --- | ---: |
+| `std::process::Command`, `/bin/true` | 546.44 µs |
+| `Runner` with its `pre_exec` setup, `/bin/true` | 1.454 ms |
+| `Runner` with parent sync callback, `/bin/true` | 1.888 ms |
+
+The Go `pkg/forkexec` benchmarks measured 131.9 µs for `BenchmarkStdFork` and
+319.0 µs for `BenchmarkSimpleFork`. These use `b.RunParallel`, while Rust's
+Criterion case is sequential, so those figures are not a valid latency
+comparison. The Rust warm-container benchmark could not initialize its helper
+in this environment. The full Go integration package passed against the
+unchanged Rust release server in 37.2 seconds on 2026-10-30.
+
+## 2026-10-30 matched launch-path trace
+
+The production spawn mismatch is the `pre_exec` hook, which disables Rust
+`std::process::Command`'s vfork fast path. A one-child `strace` of Rust's
+`Runner` showed `clone(... SIGCHLD)` with neither `CLONE_VM` nor `CLONE_VFORK`;
+the Go `Runner` showed `clone(... CLONE_VM | CLONE_VFORK | SIGCHLD)`. The
+Go child runs raw syscalls, which lets its parent remain suspended while the
+child shares its address space until `execve`. Rust's hook is Rust code and
+uses the standard-library fork-safe path.
+
+Sequential loops measured the same launch patterns on this host. Both plain
+standard-library paths ran `/bin/true`; both Runner paths ran `/bin/echo` with
+`PATH=/bin`, cwd `/bin`, and all three standard descriptors redirected to the
+same `/dev/null` file. Each Runner configuration was reused across 3,000
+launches:
+
+| Path | Time/op |
+| --- | ---: |
+| Go `syscall.ForkExec`, plain `/bin/true` | 561 µs |
+| Rust `std::process::Command`, plain `/bin/true` | 520 µs |
+| Go `forkexec.Runner`, sequential | 672 µs |
+| Rust `Runner`, sequential | 802 µs |
+
+This puts the matched Runner gap near 130 µs/op (about 19%). The new Criterion
+ablations also measured Rust `std_command` at 527 µs, a no-op `pre_exec` at
+723 µs, the reused Runner at 815 µs, and the Go-shaped Runner configuration at
+844 µs. The no-op hook alone costs about 196 µs and confirms the fork-mode
+fallback is material. Registering and rebuilding the Rust `Runner` in each
+timed iteration raised that case to 1.45 ms; Go's existing benchmark reuses
+its Runner, so that earlier comparison overstated the launch gap.
+
+The Rust child also makes 12 explicit signal-action syscalls in the setup
+hook, but Go resets signals too, so the trace does not point to signal setup as
+the main cause. The strongest explanation for the remaining matched gap is
+the ordinary fork required by Rust's `pre_exec` hook. Forking a larger server
+process can amplify its page-table cost; the small standalone measurements
+above do not quantify that production-scale effect. Rust's benchmark now has
+`runner_pre_exec_reused_config`, `go_simplefork_matched`, and
+`std_command_noop_pre_exec` cases to keep these comparisons visible.
+
 Implementation parity work and benchmark analysis were assisted by OpenAI
 Codex, in collaboration with the project maintainer.
 
@@ -286,9 +371,10 @@ against Go. The largest measured difference came from two tests:
 
 Together these account for essentially the full-suite gap. The 10,000-request
 case launches a fresh tiny executable for every request, amplifying process
-setup cost. Rust intentionally uses `std::process::Command` and its `pre_exec`
-setup; Go uses its Linux `vfork`/`clone3` fork-exec path. This is the main
-remaining launch-heavy gap under the selected Rust standard-library strategy.
+setup cost. Rust uses `std::process::Command` with `pre_exec`, which takes the
+ordinary fork path on the tested toolchain; Go uses its Linux vfork path and
+uses `clone3` when cgroup-FD placement is requested. This is a launch-path
+difference in addition to the cgroup-placement difference.
 The proxy matrix also remains slower in both direct-pipe and relay modes.
 
 I checked the worker-count hypothesis as well. Go defaults to
@@ -331,14 +417,14 @@ this process-heavy case, but neither server took multiple minutes.
 
 The worker queue's `std::sync::mpsc::Receiver` mutex was considered as a source
 of contention. A temporary crossbeam MPMC queue did not improve the isolated
-result, so it was not retained. The remaining likely difference is process
-creation: Go's Linux fork-exec path uses `vfork` and `clone3(CLONE_INTO_CGROUP)`
-when available (`go-sandbox/pkg/forkexec/fork_child_linux.go`), while Rust uses
-`std::process::Command` and its post-fork setup, as required for this port. The
+result, so it was not retained. Process creation remains a likely contributor:
+Go's Linux fork-exec path uses `vfork` and uses `clone3(CLONE_INTO_CGROUP)` when
+available (`go-sandbox/pkg/forkexec/fork_child_linux.go`), while Rust's
+`pre_exec` hook selects ordinary fork on the tested toolchain. The
 10,000-request test launches one process per request, so this difference is
-amplified there. Replacing the standard-library path with a custom vfork or
-clone3 launcher would violate the selected implementation strategy; this is a
-known performance tradeoff, not an unexplained multi-minute regression.
+amplified there. The clone-mode trace supersedes the earlier assumption that
+Rust's production `Runner` was already using the standard library's vfork
+fast path.
 
 ## 2026-10-30 current-tree recheck
 
@@ -392,8 +478,8 @@ I repeated the isolated test with seccomp disabled on both servers. Rust took
 18.6 seconds and Go took 8.2 seconds. This points to two distinct costs:
 process-heavy requests remain about 2x slower with seccomp disabled, and the
 proxy matrix remains slower independently. The process-heavy gap is consistent
-with the required Rust `std::process::Command` plus `pre_exec` launch path
-versus Go's Linux `vfork`/`clone3` path. Seccomp is not the main source of the
+with Rust's `pre_exec`-forced fork path versus Go's Linux vfork path (with
+`clone3` for cgroup-FD placement). Seccomp is not the main source of the
 gap. These are single-run timings and should be treated as directional, but
 the complete suite is well below two minutes and passed with the current tree.
 
@@ -414,7 +500,7 @@ nor the proxy relay explains the base-case slowdown. This narrows the problem
 to workload scheduling or process execution behavior in the Rust container
 path, but the available sampling profile did not collect enough samples to
 identify the specific hot syscall or scheduling point. The known
-`Command` versus Go's `vfork`/`clone3` launch difference remains relevant to
+`pre_exec`-forced fork versus Go's vfork launch difference remains relevant to
 startup-heavy benchmarks, but does not by itself explain the elevated CPU time
 inside this interactive workload. The launch-path difference is not a complete
 diagnosis for this matrix.
@@ -1002,17 +1088,18 @@ This run confirms a repeatable request-path gap once concurrency exceeds one.
 After the benchmark and ablation, the complete Go integration package passed
 against the release Rust server in 37.6 seconds (`go test -tags integration
 -count=1 ./integration_test`, 2026-10-30). Go's startup log confirms it selected
-`clone3(CLONE_INTO_CGROUP)` on this kernel, while Rust uses the requested
-`std::process::Command` launch path and enrolls the child through cgroup
-membership files. A controlled ablation shows the cgroup placement fast path
-explains most of the gap. In a temporary Go worktree with `tryClone3` disabled,
+`clone3(CLONE_INTO_CGROUP)` on this kernel, while Rust enrolls the child through
+cgroup membership files and its `pre_exec` hook uses ordinary fork. A
+controlled ablation shows that cgroup placement helps Go. In a temporary Go
+worktree with `tryClone3` disabled,
 the same benchmark measured fallback
 medians of 0.942, 0.917, 0.932, and 0.931 ms/op at concurrency 1, 2, 4, and 8.
 Rust's medians were 0.851, 0.862, 0.895, and 0.876 ms/op, respectively, 4–10%
-faster than Go's standard fork/exec path in this ablation. Disabling Go's
-clone3 path increased its median latency by 19–27%. Reproducing that
-optimization would violate the standard-library fork/exec constraint, so the
-Rust launch strategy remains unchanged.
+faster than Go's fallback in that server benchmark. Disabling Go's clone3
+cgroup placement increased its median latency by 19–27%; it did not disable
+vfork. Those results therefore do not show that cgroup placement explains most
+of the Rust/Go gap. The `pre_exec`-forced fork is a separate measured
+difference.
 
 After the production-init verification, the serial Rust test run passed all
 255 library tests and 7 binary tests; `cargo fmt --check` and the Criterion

@@ -5,24 +5,24 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use nix::unistd::pipe;
 use prost::Message;
-use rust_sandbox::container::fork_exec::Runner;
-use rust_sandbox::container::memfd;
-use rust_sandbox::container::rlimit::RLimits;
-use rust_sandbox::env::linux_environment::{LinuxEnvironment, LinuxEnvironmentConfig};
-use rust_sandbox::env::linuxcontainer::{Cgroup, CgroupV2, CgroupV2Builder};
-use rust_sandbox::envexec::{
+use rust_judge::container::fork_exec::Runner;
+use rust_judge::container::memfd;
+use rust_judge::container::rlimit::RLimits;
+use rust_judge::env::linux_environment::{LinuxEnvironment, LinuxEnvironmentConfig};
+use rust_judge::env::linuxcontainer::{Cgroup, CgroupV2, CgroupV2Builder};
+use rust_judge::envexec::{
     Cmd, Environment, ExecveParam, File as EnvFile, Group, OpenParam, OpenResult, PipeIndex,
     PipeMapping, SymlinkParam,
 };
-use rust_sandbox::pb::{
+use rust_judge::pb::{
     self,
     request::{CmdType, File, MemoryFile, file::Kind},
 };
-use rust_sandbox::unixsocket::{SendMessage, Socket};
+use rust_judge::unixsocket::{SendMessage, Socket};
 use std::ffi::CString;
 use std::io::{self, Cursor};
-use std::os::fd::{AsFd, FromRawFd};
-use std::os::unix::process::ExitStatusExt;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -195,7 +195,7 @@ fn tokio_task_poll_hook_overhead(c: &mut Criterion) {
 
     let mut hooks_only_builder = tokio::runtime::Builder::new_current_thread();
     hooks_only_builder.enable_all();
-    rust_sandbox::runtime_trace::install_task_poll_hooks_without_schedule_latency(
+    rust_judge::runtime_trace::install_task_poll_hooks_without_schedule_latency(
         &mut hooks_only_builder,
     );
     let hooks_only_runtime = hooks_only_builder
@@ -204,7 +204,7 @@ fn tokio_task_poll_hook_overhead(c: &mut Criterion) {
 
     let mut schedule_latency_builder = tokio::runtime::Builder::new_current_thread();
     schedule_latency_builder.enable_all();
-    rust_sandbox::runtime_trace::install_task_poll_hooks_with_schedule_latency(
+    rust_judge::runtime_trace::install_task_poll_hooks_with_schedule_latency(
         &mut schedule_latency_builder,
         true,
     );
@@ -311,6 +311,44 @@ fn protobuf_encode_decode(c: &mut Criterion) {
     group.finish();
 }
 
+fn go_simplefork_runner(dev_null_fd: i32) -> Runner {
+    Runner {
+        args: vec![CString::new("/bin/echo").unwrap()],
+        env: vec![CString::new("PATH=/bin").unwrap()],
+        work_dir: CString::new("/bin").unwrap(),
+        container_root: None,
+        bind_mounts: vec![],
+        proc_mounts: vec![],
+        tmpfs_mounts: vec![],
+        rootfs_tmpfs: false,
+        symlinks: vec![],
+        mask_paths: vec![],
+        fd_map: vec![dev_null_fd; 3],
+        exec_file: None,
+        pid_namespace_helper: None,
+        helper_unshare_flags: 0,
+        helper_args: None,
+        cgroup_procs_fds: vec![],
+        user_namespace_fd: None,
+        cpu_set: None,
+        rlimits: RLimits::default(),
+        pivot_root: None,
+        host_name: None,
+        domain_name: None,
+        sync_fn: None,
+        clone_flags: 0,
+        credential: None,
+        uid_map: None,
+        gid_map: None,
+        gid_map_enable_set_groups: false,
+        no_new_privs: false,
+        seccomp: Default::default(),
+        drop_caps: false,
+        unshare_cgroup_after_sync: false,
+        control_tty: false,
+    }
+}
+
 fn forkexec_true(c: &mut Criterion) {
     let mut group = c.benchmark_group("forkexec/bin_true");
     group.bench_function("std_command", |b| {
@@ -319,6 +357,17 @@ fn forkexec_true(c: &mut Criterion) {
                 .env_clear()
                 .status()
                 .unwrap();
+            assert!(status.success());
+            black_box(status);
+        });
+    });
+    group.bench_function("std_command_noop_pre_exec", |b| {
+        b.iter(|| {
+            let mut command = std::process::Command::new("/bin/true");
+            // Registering even an empty hook exercises std's fork fallback
+            // used by Runner, without adding sandbox syscalls to the child.
+            unsafe { command.pre_exec(|| Ok(())) };
+            let status = command.env_clear().status().unwrap();
             assert!(status.success());
             black_box(status);
         });
@@ -361,6 +410,64 @@ fn forkexec_true(c: &mut Criterion) {
                 control_tty: false,
             };
             let status = runner.start().unwrap().wait().unwrap();
+            assert!(status.success());
+            black_box(status);
+        });
+    });
+    // Go's BenchmarkSimpleFork builds its Runner once before timing. Keep a
+    // corresponding Rust case so per-request Runner construction does not get
+    // conflated with the fork/exec and child setup path.
+    let mut reused_runner = Runner {
+        args: vec![CString::new("/bin/true").unwrap()],
+        env: vec![],
+        work_dir: CString::new("").unwrap(),
+        container_root: None,
+        bind_mounts: vec![],
+        proc_mounts: vec![],
+        tmpfs_mounts: vec![],
+        rootfs_tmpfs: false,
+        symlinks: vec![],
+        mask_paths: vec![],
+        fd_map: vec![],
+        exec_file: None,
+        pid_namespace_helper: None,
+        helper_unshare_flags: 0,
+        helper_args: None,
+        cgroup_procs_fds: vec![],
+        user_namespace_fd: None,
+        cpu_set: None,
+        rlimits: RLimits::default(),
+        pivot_root: None,
+        host_name: None,
+        domain_name: None,
+        sync_fn: None,
+        clone_flags: 0,
+        credential: None,
+        uid_map: None,
+        gid_map: None,
+        gid_map_enable_set_groups: false,
+        no_new_privs: false,
+        seccomp: Default::default(),
+        drop_caps: false,
+        unshare_cgroup_after_sync: false,
+        control_tty: false,
+    };
+    group.bench_function("runner_pre_exec_reused_config", |b| {
+        b.iter(|| {
+            let status = reused_runner.start().unwrap().wait().unwrap();
+            assert!(status.success());
+            black_box(status);
+        });
+    });
+    let null = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
+    let mut go_runner = go_simplefork_runner(null.as_raw_fd());
+    group.bench_function("go_simplefork_matched", |b| {
+        b.iter(|| {
+            let status = go_runner.start().unwrap().wait().unwrap();
             assert!(status.success());
             black_box(status);
         });
@@ -490,7 +597,7 @@ fn envexec_pipe_stream(c: &mut Criterion) {
                     .run()
                     .expect("run pipe benchmark group");
                     assert!(results.iter().all(|result| {
-                        result.status == rust_sandbox::envexec::Status::Accepted
+                        result.status == rust_judge::envexec::Status::Accepted
                     }));
                     black_box(results);
                 });
@@ -555,7 +662,7 @@ fn envexec_pipe_interactive(c: &mut Criterion) {
                     .run()
                     .expect("run interactive pipe benchmark group");
                     assert!(results.iter().all(|result| {
-                        result.status == rust_sandbox::envexec::Status::Accepted
+                        result.status == rust_judge::envexec::Status::Accepted
                     }));
                     black_box(results);
                 });
@@ -606,12 +713,12 @@ fn bench_null_stdio() -> EnvFile {
 struct BenchEnvironment;
 struct BenchProcess {
     child: Mutex<Child>,
-    result: Mutex<Option<rust_sandbox::runner::ResultInfo>>,
+    result: Mutex<Option<rust_judge::runner::ResultInfo>>,
     started: Instant,
 }
 
 impl Environment for BenchEnvironment {
-    fn execve(&self, param: ExecveParam) -> io::Result<Box<dyn rust_sandbox::envexec::Process>> {
+    fn execve(&self, param: ExecveParam) -> io::Result<Box<dyn rust_judge::envexec::Process>> {
         let Some(program) = param.args.first() else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -676,7 +783,7 @@ impl Environment for BenchEnvironment {
     }
 }
 
-impl rust_sandbox::envexec::Process for BenchProcess {
+impl rust_judge::envexec::Process for BenchProcess {
     fn done(&self) -> bool {
         let mut result = self.result.lock().expect("benchmark process result lock");
         if result.is_some() {
@@ -690,8 +797,8 @@ impl rust_sandbox::envexec::Process for BenchProcess {
             }
             Ok(None) => false,
             Err(error) => {
-                *result = Some(rust_sandbox::runner::ResultInfo {
-                    status: rust_sandbox::runner::Status::RunnerError,
+                *result = Some(rust_judge::runner::ResultInfo {
+                    status: rust_judge::runner::Status::RunnerError,
                     error: error.to_string(),
                     ..Default::default()
                 });
@@ -700,15 +807,15 @@ impl rust_sandbox::envexec::Process for BenchProcess {
         }
     }
 
-    fn result(&self) -> rust_sandbox::runner::ResultInfo {
+    fn result(&self) -> rust_judge::runner::ResultInfo {
         if !self.done() {
             let status = self.child.lock().expect("benchmark child lock").wait();
             let mut result = self.result.lock().expect("benchmark process result lock");
             if result.is_none() {
                 *result = Some(match status {
                     Ok(status) => bench_result(status, self.started.elapsed()),
-                    Err(error) => rust_sandbox::runner::ResultInfo {
-                        status: rust_sandbox::runner::Status::RunnerError,
+                    Err(error) => rust_judge::runner::ResultInfo {
+                        status: rust_judge::runner::Status::RunnerError,
                         error: error.to_string(),
                         ..Default::default()
                     },
@@ -722,8 +829,8 @@ impl rust_sandbox::envexec::Process for BenchProcess {
             .unwrap_or_default()
     }
 
-    fn usage(&self) -> rust_sandbox::envexec::Usage {
-        rust_sandbox::envexec::Usage::default()
+    fn usage(&self) -> rust_judge::envexec::Usage {
+        rust_judge::envexec::Usage::default()
     }
 
     fn cancel(&self) {
@@ -738,18 +845,18 @@ impl rust_sandbox::envexec::Process for BenchProcess {
 fn bench_result(
     status: ExitStatus,
     elapsed: std::time::Duration,
-) -> rust_sandbox::runner::ResultInfo {
+) -> rust_judge::runner::ResultInfo {
     let (status_kind, exit_status) = if status.success() {
-        (rust_sandbox::runner::Status::Normal, 0)
+        (rust_judge::runner::Status::Normal, 0)
     } else if let Some(code) = status.code() {
-        (rust_sandbox::runner::Status::NonzeroExitStatus, code)
+        (rust_judge::runner::Status::NonzeroExitStatus, code)
     } else {
         (
-            rust_sandbox::runner::Status::Signalled,
+            rust_judge::runner::Status::Signalled,
             status.signal().unwrap_or(0),
         )
     };
-    rust_sandbox::runner::ResultInfo {
+    rust_judge::runner::ResultInfo {
         status: status_kind,
         exit_status,
         running_time: elapsed,

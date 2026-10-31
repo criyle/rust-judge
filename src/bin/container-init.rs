@@ -8,7 +8,7 @@ fn main() -> ExitCode {
             arg == "--keepalive" || arg == "--exec-direct" || arg == "--seccomp-file"
         })
     {
-        return match rust_sandbox::commands::go_judge_init::run() {
+        return match rust_judge::commands::go_judge_init::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("container-init: {error}");
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
             }
         };
     }
-    match rust_sandbox::commands::container_init::run(arguments.into_iter().skip(1)) {
+    match rust_judge::commands::container_init::run(arguments.into_iter().skip(1)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("container-init: {error}");

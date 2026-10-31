@@ -1,5 +1,5 @@
-use rust_sandbox::runner::runprog::{Options, cli_usage, run_container, write_result};
-use rust_sandbox::runner::{ResultInfo, Status};
+use rust_judge::runner::runprog::{Options, cli_usage, run_container, write_result};
+use rust_judge::runner::{ResultInfo, Status};
 use std::fs::OpenOptions;
 use std::io;
 
