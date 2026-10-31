@@ -44,9 +44,14 @@ jobs:
           if command -v aa-status >/dev/null 2>&1; then
             sudo aa-status || true
           fi
-      - name: Unit tests
+      - name: Unit tests (privileged sandbox)
         if: matrix.toolchain == 'stable'
-        run: cargo test --locked --lib --bins
+        run: |
+          sudo env \
+            "PATH=$PATH" \
+            "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" \
+            "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
+            cargo test --locked --lib --bins
       - name: Verify package contents
         if: matrix.toolchain == 'stable'
         run: cargo package --locked --no-verify
