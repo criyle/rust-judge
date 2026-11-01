@@ -1,5 +1,7 @@
 # rust-judge
 
+> **Note:** Work on this Rust port began in 2023 and was set aside because of the scope involved. With substantial AI assistance, the current implementation came together in about 16 hours using GPT-6 Luna and less than US$20 in API usage. The Go integration tests pass; current concurrency benchmarks show rust-judge runs about 20% slower than go-judge.
+
 `rust-judge` is a Rust implementation of [go-judge](https://github.com/criyle/go-judge), a service and library for running programs in isolated, resource-limited Linux environments. It provides REST, WebSocket, and gRPC service code, a reusable worker API, container and execution primitives, and command-line tools.
 
 The project is still developing compatibility with upstream go-judge. It is useful for evaluation, integration work, and deployments that can validate the implementation against their own threat model. It is not currently a drop-in production replacement. Read [Security](SECURITY.md) before using it to execute untrusted programs.
