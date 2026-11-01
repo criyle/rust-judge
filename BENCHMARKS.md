@@ -1054,20 +1054,13 @@ The server configuration parser now matches Go's `parallelism <= 0` fallback
 for both CLI flags and `ES_PARALLELISM` values: zero or a negative value
 selects the logical CPU count. The focused config unit test covers both input
 paths. Compound Go-style durations also accept the leading `+` sign, and a
-negative file timeout maps to disabled expiration as in Go. A zero force-GC
-interval now fails server startup instead of silently disabling the task.
-
-The configured force-GC interval and target now drive a periodic Tokio task
-on Linux/glibc. Rust reclaims values at drop time rather than tracing them;
-the task checks the glibc allocator footprint and calls `malloc_trim` through
-Tokio's blocking pool when the target is exceeded. This returns already-free
-pages, but cannot collect live values or reproduce Go's heap profile. Targets
-without glibc have no allocator trimming equivalent in this build and skip
-the task. The allocator checks have focused unit coverage. After wiring the
-task, the release server passed the full Go integration package in 117.6
-seconds on 2026-10-30.
-The release server also passed the full integration package in 121.5 seconds
-after the negative file-timeout and zero force-GC interval parity fixes.
+negative file timeout maps to disabled expiration as in Go. At this stage the
+port also included a periodic glibc allocator-trimming task modeled on Go's
+force-GC worker. That task and its force-GC options have since been removed:
+Rust has no tracing garbage collector, and the allocator-specific monitor was
+not retained. The release server passed the full Go integration package in
+117.6 seconds after the original task was added; it passed again in 121.5
+seconds after the negative file-timeout change.
 
 ### Current concurrency benchmark against Go
 

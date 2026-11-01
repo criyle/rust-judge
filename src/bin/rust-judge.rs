@@ -263,12 +263,7 @@ fn run(mut config: Config) -> std::io::Result<()> {
         None
     };
     let runtime = rust_judge::tokio_runtime::runtime();
-    let memory_reclaimer =
-        rust_judge::memory_reclaimer::spawn(config.force_gc_interval, config.force_gc_target.0)?;
     let result = runtime.block_on(serve_with_monitor(http, grpc, monitor, state));
-    if let Some(task) = memory_reclaimer {
-        task.abort();
-    }
     worker.shutdown();
     drop(worker);
     drop(files);

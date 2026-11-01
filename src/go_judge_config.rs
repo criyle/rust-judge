@@ -44,8 +44,6 @@ pub struct Config {
     pub enable_metrics: bool,
     pub release: bool,
     pub silent: bool,
-    pub force_gc_target: Size,
-    pub force_gc_interval: Duration,
     pub version: bool,
 }
 
@@ -104,8 +102,6 @@ impl Config {
             enable_metrics: false,
             release: pid == 1,
             silent: false,
-            force_gc_target: Size(20 << 20),
-            force_gc_interval: Duration::from_secs(5),
             version: false,
         }
     }
@@ -193,7 +189,7 @@ Options use kebab-case names; settings can also be supplied as ES_<UPPER_SNAKE_C
   --file-timeout DURATION --http-addr ADDR --enable-grpc --grpc-addr ADDR
   --monitor-addr ADDR --auth-token TOKEN --grpc-msg-size SIZE
   --enable-debug --enable-metrics --release --silent
-  --force-gc-target SIZE --force-gc-interval DURATION --version --help
+  --version --help
 "#;
 
 fn normalize_name(s: &str) -> Option<&'static str> {
@@ -235,8 +231,6 @@ fn normalize_name(s: &str) -> Option<&'static str> {
         "enablemetrics" => "enable_metrics",
         "release" => "release",
         "silent" => "silent",
-        "forcegctarget" => "force_gc_target",
-        "forcegcinterval" => "force_gc_interval",
         "version" => "version",
         _ => return None,
     })
@@ -310,8 +304,6 @@ fn set_value(c: &mut Config, name: &str, value: &str, from_env: bool) -> Result<
         "enable_metrics" => c.enable_metrics = boolean()?,
         "release" => c.release = boolean()?,
         "silent" => c.silent = boolean()?,
-        "force_gc_target" => c.force_gc_target = size()?,
-        "force_gc_interval" => c.force_gc_interval = duration()?,
         "version" => c.version = boolean()?,
         _ => return Err(ConfigError(format!("unknown option: {name}"))),
     }

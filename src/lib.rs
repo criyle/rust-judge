@@ -7,7 +7,6 @@ pub mod env;
 pub mod envexec;
 pub mod filestore;
 pub mod go_judge_config;
-pub mod memory_reclaimer;
 pub mod pb;
 pub mod runner;
 pub mod runtime_metrics;
