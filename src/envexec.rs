@@ -652,12 +652,12 @@ impl Group {
         for relay in group.relays {
             let _ = relay.recv();
         }
-        order_group_results(
+        Ok(order_group_results(
             slots
                 .into_iter()
                 .map(|value| value.unwrap())
                 .collect::<io::Result<Vec<_>>>()?,
-        )
+        ))
     }
 
     pub async fn run_with_cancel_async(

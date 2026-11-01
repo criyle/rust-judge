@@ -662,6 +662,7 @@ fn pb_response(response: pb::Response) -> io::Result<worker::Response> {
         }
         out.results.push(worker::ResultInfo {
             status,
+            exit_order: r.exit_order.max(0) as usize,
             exit_status: r.exit_status,
             error: r.error,
             time: Duration::from_nanos(r.time),
@@ -777,6 +778,7 @@ fn json_response(v: serde_json::Value) -> io::Result<worker::Response> {
             .unwrap_or_default();
         response.results.push(worker::ResultInfo {
             status,
+            exit_order: r.get("exitOrder").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
             exit_status: r.get("exitStatus").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
             error: r
                 .get("error")
