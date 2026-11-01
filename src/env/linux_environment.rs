@@ -1671,6 +1671,7 @@ fn is_anonymous_pipe(fd: i32) -> io::Result<bool> {
 
 struct RemoteProcessState {
     result: Option<ResultInfo>,
+    finished_at: Option<u64>,
     usage: Usage,
     started: Instant,
     cgroup: Option<Box<dyn Cgroup>>,
@@ -1694,6 +1695,7 @@ impl RemoteProcess {
             Self {
                 state: Arc::new(Mutex::new(RemoteProcessState {
                     result: None,
+                    finished_at: None,
                     usage: Usage::default(),
                     started: Instant::now(),
                     cgroup,
@@ -1709,6 +1711,13 @@ impl RemoteProcess {
 
     fn complete(&self, reply: io::Result<crate::container::protocol::Reply>) {
         let mut state = self.state.lock().unwrap();
+        state.finished_at = reply
+            .as_ref()
+            .ok()
+            .and_then(|reply| reply.exec_reply.as_ref())
+            .map(|result| result.exit_time_ns)
+            .filter(|timestamp| *timestamp != 0)
+            .or_else(crate::envexec::monotonic_time_ns);
         let (result, reported_usage) = match reply {
             Ok(reply) if reply.error.is_none() => match reply.exec_reply {
                 Some(result) => {
@@ -1827,6 +1836,10 @@ impl Process for Arc<RemoteProcess> {
             state = self.changed.wait(state).unwrap();
         }
         state.result.clone().unwrap_or_default()
+    }
+
+    fn finished_at(&self) -> Option<u64> {
+        self.state.lock().unwrap().finished_at
     }
 
     fn usage(&self) -> Usage {

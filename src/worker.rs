@@ -281,6 +281,7 @@ impl fmt::Display for JudgeStatus {
 #[derive(Debug, Default)]
 pub struct ResultInfo {
     pub status: JudgeStatus,
+    pub exit_order: usize,
     pub exit_status: i32,
     pub error: String,
     pub time: Duration,
@@ -433,6 +434,7 @@ pub fn convert_result(
 ) -> ResultInfo {
     let mut out = ResultInfo {
         status: result.status.into(),
+        exit_order: result.exit_order,
         exit_status: result.exit_status,
         error: result.error,
         time: result.time,

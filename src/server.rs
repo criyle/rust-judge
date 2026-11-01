@@ -1301,6 +1301,7 @@ async fn version(State(s): State<Arc<ServerState>>) -> impl IntoResponse {
         "copyOutTruncate": true,
         "pipeProxyZeroCopy": true,
         "fixSymlinkEscape": true,
+        "exitOrder": true,
     }))
 }
 
@@ -1327,6 +1328,7 @@ async fn config(State(s): State<Arc<ServerState>>) -> impl IntoResponse {
         "copyOutTruncate": true,
         "pipeProxyZeroCopy": true,
         "fixSymlinkEscape": true,
+        "exitOrder": true,
         // The server resolves Go's default directory before constructing
         // `ServerState`, so this reports the effective file-store path.
         "fileStorePath": s.config.dir,
@@ -1464,6 +1466,9 @@ fn response_results(r: crate::worker::Response) -> Vec<Value> {
                 "memory": x.memory.0,
             });
             let object = result.as_object_mut().expect("JSON result object");
+            if x.exit_order != 0 {
+                object.insert("exitOrder".into(), json!(x.exit_order));
+            }
             if !x.error.is_empty() {
                 object.insert("error".into(), Value::String(x.error));
             }
@@ -1537,6 +1542,7 @@ fn grpc_response(result: crate::worker::Response) -> Result<grpc_proto::Response
                 time: r.time.as_nanos() as u64,
                 run_time: r.run_time.as_nanos() as u64,
                 proc_peak: r.proc_peak,
+                exit_order: r.exit_order as i32,
                 memory: r.memory.0,
                 files,
                 file_i_ds: r.file_ids,
@@ -2615,6 +2621,7 @@ impl grpc_proto::executor_server::Executor for GrpcApi {
                         time: r.time.as_nanos() as u64,
                         run_time: r.run_time.as_nanos() as u64,
                         proc_peak: r.proc_peak,
+                        exit_order: r.exit_order as i32,
                         memory: r.memory.0,
                         files,
                         file_i_ds: r.file_ids,

@@ -834,6 +834,7 @@ async fn execute(
     // loop, matching go-sandbox's waitAll behavior.
     let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
     reap_children(pid);
+    let exit_time_ns = crate::envexec::monotonic_time_ns().unwrap_or_default();
     let (status_code, exit_status) = if let Some(code) = status.code() {
         (if code == 0 { 0 } else { 7 }, code)
     } else if let Some(signal) = status.signal() {
@@ -856,6 +857,7 @@ async fn execute(
                 // fills usage only on kernels where pidfd waiting is unavailable.
                 time_ns: usage.user_time_ns.min(i64::MAX as u64) as i64,
                 memory_bytes: usage.peak_memory_bytes,
+                exit_time_ns,
             }),
             ..Default::default()
         },

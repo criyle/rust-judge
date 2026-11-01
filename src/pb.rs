@@ -199,6 +199,9 @@ pub mod response {
         pub file_error: Vec<FileError>,
         #[prost(uint64, tag = "10")]
         pub proc_peak: u64,
+        /// 1-based completion order within a grouped run; zero means unknown.
+        #[prost(int32, tag = "11")]
+        pub exit_order: i32,
     }
     pub mod result {
         use super::*;

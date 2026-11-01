@@ -470,6 +470,9 @@ fn proto_result(result: &pb::response::Result) -> Value {
     put_u64(&mut value, "time", result.time);
     put_u64(&mut value, "runTime", result.run_time);
     put_u64(&mut value, "procPeak", result.proc_peak);
+    if result.exit_order != 0 {
+        value.insert("exitOrder".into(), json!(result.exit_order));
+    }
     put_u64(&mut value, "memory", result.memory);
     if !result.files.is_empty() {
         value.insert(

@@ -19,6 +19,22 @@ use std::time::Duration;
 pub const FILE_COPY_PARALLELISM: usize = 8;
 pub type NewStoreFile = Arc<dyn Fn() -> io::Result<HostFile> + Send + Sync>;
 
+pub(crate) fn monotonic_time_ns() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, ts.as_mut_ptr()) } == 0 {
+            let ts = unsafe { ts.assume_init() };
+            return Some(
+                (ts.tv_sec as u64)
+                    .saturating_mul(1_000_000_000)
+                    .saturating_add(ts.tv_nsec as u64),
+            );
+        }
+    }
+    None
+}
+
 #[cfg(target_os = "linux")]
 static READER_MEMFD_ENABLED: AtomicBool = AtomicBool::new(true);
 
@@ -65,6 +81,10 @@ pub struct ExecveParam {
 pub trait Process: Send + Sync {
     fn done(&self) -> bool;
     fn result(&self) -> RunnerResult;
+    /// Monotonic time at which completion was observed, when the backend can report it.
+    fn finished_at(&self) -> Option<u64> {
+        None
+    }
     fn usage(&self) -> Usage;
     /// Wait until the process changes state or the monitoring interval elapses.
     /// Backends with eventable process handles should wake on exit.
@@ -223,6 +243,9 @@ pub struct CmdCopyOutFile {
 #[derive(Debug, Default)]
 pub struct CmdResult {
     pub status: Status,
+    /// 1-based completion order within a grouped run; zero means unknown.
+    pub exit_order: usize,
+    pub(crate) finished_at: Option<u64>,
     pub exit_status: i32,
     pub error: String,
     pub time: Duration,
@@ -578,6 +601,20 @@ pub struct Group {
     pub pipes: Vec<PipeMapping>,
     pub new_store_file: NewStoreFile,
 }
+
+fn order_group_results(mut results: Vec<CmdResult>) -> Vec<CmdResult> {
+    let mut completed: Vec<_> = results
+        .iter()
+        .enumerate()
+        .filter_map(|(i, result)| result.finished_at.map(|at| (at, i)))
+        .collect();
+    completed.sort_by_key(|(at, i)| (*at, *i));
+    for (order, (_, index)) in completed.into_iter().enumerate() {
+        results[index].exit_order = order + 1;
+    }
+    results
+}
+
 impl Group {
     pub fn run(self) -> io::Result<Vec<CmdResult>> {
         self.run_with_cancel(|| false)
@@ -615,7 +652,12 @@ impl Group {
         for relay in group.relays {
             let _ = relay.recv();
         }
-        slots.into_iter().map(|value| value.unwrap()).collect()
+        order_group_results(
+            slots
+                .into_iter()
+                .map(|value| value.unwrap())
+                .collect::<io::Result<Vec<_>>>()?,
+        )
     }
 
     pub async fn run_with_cancel_async(
@@ -644,7 +686,7 @@ impl Group {
                 .await
                 .map_err(|error| io::Error::other(format!("proxy relay waiter failed: {error}")))?;
         }
-        Ok(results)
+        Ok(order_group_results(results))
     }
 }
 
@@ -1254,6 +1296,7 @@ fn finish_command(
     let runner = process.result();
     let mut result = CmdResult {
         status: map_status(runner.status),
+        finished_at: process.finished_at().or_else(monotonic_time_ns),
         exit_status: runner.exit_status,
         error: runner.error,
         time: runner.time,

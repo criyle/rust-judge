@@ -53,6 +53,8 @@ message Response {
     uint64 time = 4;
     uint64 runTime = 8;
     uint64 procPeak = 10;
+    // 1-based completion order within a grouped run; zero means unknown.
+    int32 exitOrder = 11;
     uint64 memory = 5;
     map<string, bytes> files = 6;
     map<string, string> fileIDs = 7;

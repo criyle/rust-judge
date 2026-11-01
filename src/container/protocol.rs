@@ -121,6 +121,7 @@ pub struct ExecReply {
     /// User CPU time in nanoseconds, as sent by Go's `time.Duration`.
     pub time_ns: i64,
     pub memory_bytes: u64,
+    pub exit_time_ns: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -301,6 +302,8 @@ pub struct WireExecReply {
     pub time_ns: i64,
     #[prost(uint64, tag = "4")]
     pub memory_bytes: u64,
+    #[prost(uint64, tag = "5")]
+    pub exit_time_ns: u64,
 }
 
 fn encode_filter(filter: &Filter) -> Vec<WireFilterInstruction> {
@@ -441,6 +444,7 @@ impl From<&Reply> for WireReply {
                 status: e.status,
                 time_ns: e.time_ns,
                 memory_bytes: e.memory_bytes,
+                exit_time_ns: e.exit_time_ns,
             }),
             batch_errors: reply.batch_errors.clone(),
         }
@@ -562,6 +566,7 @@ impl From<WireReply> for Reply {
                 status: e.status,
                 time_ns: e.time_ns,
                 memory_bytes: e.memory_bytes,
+                exit_time_ns: e.exit_time_ns,
             }),
             batch_errors: wire.batch_errors,
         }
