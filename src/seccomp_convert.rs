@@ -135,7 +135,7 @@ pub fn run(options: &Options) -> Result<PolicyProfile, String> {
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound
                 && !options.input_was_explicit
-                && options.input == PathBuf::from(DEFAULT_INPUT) =>
+                && options.input == *DEFAULT_INPUT =>
         {
             seccomp_policy::MOBY_DEFAULT_JSON.to_vec()
         }
@@ -226,7 +226,7 @@ mod tests {
             input_was_explicit: true,
         };
         let profile = run(&options).unwrap();
-        assert!(profile.assemble("x86_64").unwrap().0.len() > 0);
+        assert!(!profile.assemble("x86_64").unwrap().0.is_empty());
         let yaml = fs::read_to_string(&output).unwrap();
         assert!(yaml.contains("default_action: errno"));
         fs::remove_dir_all(dir).unwrap();

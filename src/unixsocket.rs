@@ -174,7 +174,7 @@ mod tests {
         let (a, b) = Socket::pair()?;
         let mut read_ends = Vec::new();
         let mut write_ends = Vec::new();
-        for byte in [b'a', b'b', b'c'] {
+        for byte in *b"abc" {
             let (r, w) = pipe().map_err(io::Error::from)?;
             write(&w, &[byte]).map_err(io::Error::from)?;
             read_ends.push(r);

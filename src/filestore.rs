@@ -22,14 +22,14 @@ struct LocalTimeout {
 impl LocalFileStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
-        if crate::runtime_metrics::is_enabled() {
-            if let Ok(entries) = fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    if let Ok(metadata) = entry.metadata() {
-                        if metadata.is_file() {
-                            crate::runtime_metrics::observe_file_size(metadata.len());
-                        }
-                    }
+        if crate::runtime_metrics::is_enabled()
+            && let Ok(entries) = fs::read_dir(&dir)
+        {
+            for entry in entries.flatten() {
+                if let Ok(metadata) = entry.metadata()
+                    && metadata.is_file()
+                {
+                    crate::runtime_metrics::observe_file_size(metadata.len());
                 }
             }
         }
@@ -82,10 +82,10 @@ impl LocalFileStore {
             })?
             .to_owned();
         self.names.lock().unwrap().insert(id.clone(), name.into());
-        if crate::runtime_metrics::is_enabled() {
-            if let Ok(metadata) = fs::metadata(path) {
-                crate::runtime_metrics::observe_file_size(metadata.len());
-            }
+        if crate::runtime_metrics::is_enabled()
+            && let Ok(metadata) = fs::metadata(path)
+        {
+            crate::runtime_metrics::observe_file_size(metadata.len());
         }
         if let Some(timeout) = &self.timeout {
             timeout.touch(&id);
@@ -107,10 +107,10 @@ impl LocalFileStore {
             let _ = self.remove(&id);
             return Err(error);
         }
-        if crate::runtime_metrics::is_enabled() {
-            if let Ok(metadata) = fs::metadata(self.dir.join(&id)) {
-                crate::runtime_metrics::observe_file_size(metadata.len());
-            }
+        if crate::runtime_metrics::is_enabled()
+            && let Ok(metadata) = fs::metadata(self.dir.join(&id))
+        {
+            crate::runtime_metrics::observe_file_size(metadata.len());
         }
         Ok(id)
     }
@@ -370,10 +370,10 @@ impl TimeoutFileStore {
     }
     pub fn get(&self, id: &str) -> Option<(String, File)> {
         let found = self.shared.inner.get(id);
-        if found.is_some() {
-            if let Some(t) = self.shared.accessed.lock().unwrap().get_mut(id) {
-                *t = Instant::now();
-            }
+        if found.is_some()
+            && let Some(t) = self.shared.accessed.lock().unwrap().get_mut(id)
+        {
+            *t = Instant::now();
         }
         found
     }
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(s, "payload");
         assert!(store.list().unwrap().contains_key(&id));
         assert!(store.get("../etc/passwd").is_none());
-        assert!(store.remove("../etc/passwd") == false);
+        assert!(!store.remove("../etc/passwd"));
         assert!(store.remove(&id));
         assert!(store.get(&id).is_none());
         fs::remove_dir_all(dir).unwrap();

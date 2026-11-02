@@ -683,9 +683,11 @@ mod tests {
 
     #[test]
     fn normalizes_limits_and_work_path() {
-        let mut options = Options::default();
-        options.time_limit = 4;
-        options.stack_limit_mb = 512;
+        let mut options = Options {
+            time_limit: 4,
+            stack_limit_mb: 512,
+            ..Options::default()
+        };
         options.normalize(|| Ok(PathBuf::from("/work"))).unwrap();
         assert_eq!(options.real_time_limit, 6);
         assert_eq!(options.stack_limit_mb, 256);
@@ -897,11 +899,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn container_runner_preserves_nonzero_exit_result() {
-        let mut options = Options::default();
-        options.runner = "container".into();
-        options.program_type = "compiler".into();
-        options.unsafe_mode = true;
-        options.command = ["/bin/sh", "-c", "exit 7"].map(OsString::from).into();
+        let options = Options {
+            runner: "container".into(),
+            program_type: "compiler".into(),
+            unsafe_mode: true,
+            command: ["/bin/sh", "-c", "exit 7"].map(OsString::from).into(),
+            ..Options::default()
+        };
         let result = run_container(&options).unwrap();
         assert_eq!(result.status, Status::NonzeroExitStatus);
         assert_eq!(result.exit_status, 7);
@@ -910,10 +914,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn container_runner_applies_the_default_seccomp_filter() {
-        let mut options = Options::default();
-        options.runner = "container".into();
-        options.program_type = "compiler".into();
-        options.command = ["/bin/true"].map(OsString::from).into();
+        let options = Options {
+            runner: "container".into(),
+            program_type: "compiler".into(),
+            command: ["/bin/true"].map(OsString::from).into(),
+            ..Options::default()
+        };
         let result = run_container(&options).unwrap();
         assert_eq!(result.status, Status::Normal, "{result:?}");
     }
@@ -921,11 +927,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn container_runner_executes_a_sealed_memfd_image() {
-        let mut options = Options::default();
-        options.runner = "container".into();
-        options.unsafe_mode = true;
-        options.memfd = true;
-        options.command = ["/bin/echo", "memfd-ok"].map(OsString::from).into();
+        let options = Options {
+            runner: "container".into(),
+            unsafe_mode: true,
+            memfd: true,
+            command: ["/bin/echo", "memfd-ok"].map(OsString::from).into(),
+            ..Options::default()
+        };
         let result = run_container(&options).unwrap();
         assert_eq!(result.status, Status::Normal, "{result:?}");
     }

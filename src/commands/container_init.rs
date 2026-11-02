@@ -66,7 +66,9 @@ pub fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Result<()>
         ));
     }
     let filter = bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|chunk| seccompiler::sock_filter {
             code: u16::from_ne_bytes([chunk[0], chunk[1]]),
             jt: chunk[2],
@@ -240,15 +242,15 @@ fn run_keepalive(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Resu
         if !setgroups_denied && unsafe { libc::setgroups(0, std::ptr::null()) } == -1 {
             return Err(io::Error::last_os_error());
         }
-        if let Some(gid) = gid {
-            if unsafe { libc::setgid(gid) } == -1 {
-                return Err(io::Error::last_os_error());
-            }
+        if let Some(gid) = gid
+            && unsafe { libc::setgid(gid) } == -1
+        {
+            return Err(io::Error::last_os_error());
         }
-        if let Some(uid) = uid {
-            if unsafe { libc::setuid(uid) } == -1 {
-                return Err(io::Error::last_os_error());
-            }
+        if let Some(uid) = uid
+            && unsafe { libc::setuid(uid) } == -1
+        {
+            return Err(io::Error::last_os_error());
         }
     }
 
@@ -364,10 +366,10 @@ fn mount(
 
 fn mask_path(path: &std::ffi::OsStr) -> io::Result<()> {
     let path = std::ffi::CString::new(path.as_bytes()).map_err(io::Error::other)?;
-    let empty = b"\0";
+    let empty = c"";
     if unsafe {
         libc::mount(
-            b"/dev/null\0".as_ptr().cast(),
+            c"/dev/null".as_ptr(),
             path.as_ptr(),
             empty.as_ptr().cast(),
             libc::MS_BIND as _,
@@ -477,9 +479,9 @@ fn run_exec_direct(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Re
             return Err(error);
         }
         let enter_result = unsafe {
-            if libc::setns(mount_fd, libc::CLONE_NEWNS) == -1 {
-                Err(io::Error::last_os_error())
-            } else if libc::setns(pid_fd, libc::CLONE_NEWPID) == -1 {
+            if libc::setns(mount_fd, libc::CLONE_NEWNS) == -1
+                || libc::setns(pid_fd, libc::CLONE_NEWPID) == -1
+            {
                 Err(io::Error::last_os_error())
             } else {
                 Ok(())
@@ -495,7 +497,7 @@ fn run_exec_direct(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Re
         let root = std::ffi::CString::new(root.as_os_str().as_bytes())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in root path"))?;
         if unsafe { libc::chroot(root.as_ptr()) } == -1
-            || unsafe { libc::chdir(b"/\0".as_ptr().cast()) } == -1
+            || unsafe { libc::chdir(c"/".as_ptr()) } == -1
         {
             return Err(io::Error::last_os_error());
         }
@@ -516,15 +518,15 @@ fn run_exec_direct(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Re
         if !setgroups_denied && unsafe { libc::setgroups(0, std::ptr::null()) } == -1 {
             return Err(io::Error::last_os_error());
         }
-        if let Some(gid) = gid {
-            if unsafe { libc::setgid(gid) } == -1 {
-                return Err(io::Error::last_os_error());
-            }
+        if let Some(gid) = gid
+            && unsafe { libc::setgid(gid) } == -1
+        {
+            return Err(io::Error::last_os_error());
         }
-        if let Some(uid) = uid {
-            if unsafe { libc::setuid(uid) } == -1 {
-                return Err(io::Error::last_os_error());
-            }
+        if let Some(uid) = uid
+            && unsafe { libc::setuid(uid) } == -1
+        {
+            return Err(io::Error::last_os_error());
         }
     }
     for signal in ignored_signals() {
@@ -652,14 +654,16 @@ fn read_filters(path: std::ffi::OsString) -> io::Result<Vec<Vec<seccompiler::soc
 }
 
 fn parse_filter(bytes: &[u8]) -> io::Result<Vec<seccompiler::sock_filter>> {
-    if bytes.len() % 8 != 0 {
+    if !bytes.len().is_multiple_of(8) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "invalid seccomp BPF length",
         ));
     }
     Ok(bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|chunk| seccompiler::sock_filter {
             code: u16::from_ne_bytes([chunk[0], chunk[1]]),
             jt: chunk[2],

@@ -787,7 +787,7 @@ mod tests {
     fn small_packet_is_unmodified() {
         let payload = encode_message(&WireReply::default());
         let packets = encode_packets(&payload);
-        assert_eq!(packets, [payload.clone()]);
+        assert_eq!(packets.as_slice(), std::slice::from_ref(&payload));
         assert_eq!(decode_packets(&packets).unwrap(), payload);
     }
 

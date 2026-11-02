@@ -204,10 +204,10 @@ mod tests {
         let (tx, rx) = Socket::pair()?;
         shutdown(rx.as_raw_fd(), Shutdown::Both).map_err(Error::other)?;
         drop(rx);
-        let mut buf = [0; 2];
+        let buf = [0; 2];
         let ret = tx
             .sendmsg(
-                &mut buf,
+                &buf,
                 &[ControlMessage::ScmCredentials(&UnixCredentials::new())],
             )
             .await;

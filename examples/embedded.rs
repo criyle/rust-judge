@@ -19,8 +19,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let files = LocalFileStore::new(data_dir.join("files"));
     std::fs::create_dir_all(data_dir.join("files"))?;
-    let mut environment_config = LinuxEnvironmentConfig::default();
-    environment_config.root_parent = data_dir.join("roots");
+    let environment_config = LinuxEnvironmentConfig {
+        root_parent: data_dir.join("roots"),
+        ..LinuxEnvironmentConfig::default()
+    };
     let environments = Arc::new(LinuxEnvironmentPool::new(environment_config)?);
 
     let mut config = WorkerConfig::new(files, environments);

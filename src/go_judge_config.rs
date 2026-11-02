@@ -48,6 +48,9 @@ pub struct Config {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Config is the normal parse outcome and keeping it inline avoids an allocation
+// on every CLI parse. `Help` is only the exceptional, zero-data case.
+#[allow(clippy::large_enum_variant)]
 pub enum ParseOutcome {
     Config(Config),
     Help,
@@ -121,10 +124,10 @@ impl Config {
     {
         let mut config = Self::defaults(pid, cpu_count);
         for (key, value) in env {
-            if let Some(field) = key.strip_prefix("ES_") {
-                if let Some(name) = normalize_name(field) {
-                    set_value(&mut config, name, value, true)?;
-                }
+            if let Some(field) = key.strip_prefix("ES_")
+                && let Some(name) = normalize_name(field)
+            {
+                set_value(&mut config, name, value, true)?;
             }
         }
 

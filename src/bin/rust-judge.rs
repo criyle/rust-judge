@@ -105,11 +105,13 @@ fn run(mut config: Config) -> std::io::Result<()> {
         std::time::Duration::from_secs(15),
     );
 
-    let mut environment_config = LinuxEnvironmentConfig::default();
-    environment_config.root_parent = if default_file_dir {
-        std::env::temp_dir()
-    } else {
-        std::path::PathBuf::from(&config.dir)
+    let mut environment_config = LinuxEnvironmentConfig {
+        root_parent: if default_file_dir {
+            std::env::temp_dir()
+        } else {
+            std::path::PathBuf::from(&config.dir)
+        },
+        ..LinuxEnvironmentConfig::default()
     };
     environment_config.tmpfs_data = config.tmp_fs_param.clone();
     environment_config.net_share = config.net_share;
@@ -407,9 +409,7 @@ fn runner_config_json(
     Ok(serde_json::json!({
         "cgroupType": cgroup_type,
         "seccomp": !config.no_seccomp,
-        // The production runner intentionally uses std::process::Command's
-        // standard-library fork/exec path, not Go's clone3 optimization.
-        "clone3": false,
+        "clone3": rust_judge::container::fork_exec::clone3_available(),
         "mount": mount_values,
         "symbolicLink": symbolic_links,
         "maskedPaths": prepared.mask_paths,
@@ -523,9 +523,11 @@ mod tests {
     #[test]
     fn runner_config_endpoint_payload_matches_builder_fields() {
         let config = Config::defaults(2, 1);
-        let mut environment = LinuxEnvironmentConfig::default();
-        environment.cgroup_root = Some(std::path::PathBuf::from("/sys/fs/cgroup/test/containers"));
-        environment.cgroup_v2_controllers = go_cgroup_controller_names("pids io cpuset cpu memory");
+        let environment = LinuxEnvironmentConfig {
+            cgroup_root: Some(std::path::PathBuf::from("/sys/fs/cgroup/test/containers")),
+            cgroup_v2_controllers: go_cgroup_controller_names("pids io cpuset cpu memory"),
+            ..LinuxEnvironmentConfig::default()
+        };
         let value = runner_config_json(&config, &environment).unwrap();
         for field in [
             "cgroupType",
@@ -547,7 +549,10 @@ mod tests {
         assert_eq!(value["uid"], 1000);
         assert_eq!(value["gid"], 1000);
         assert!(value["seccomp"].as_bool().unwrap());
-        assert_eq!(value["clone3"], false);
+        assert_eq!(
+            value["clone3"],
+            rust_judge::container::fork_exec::clone3_available()
+        );
         assert_eq!(
             value["cgroupControllers"],
             serde_json::json!(["cpu", "cpuset", "memory", "pids"])

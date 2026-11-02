@@ -26,10 +26,10 @@ pub struct SyscallParams {
 
 impl Mount {
     pub fn is_bind_mount(&self) -> bool {
-        self.flags & libc::MS_BIND as u64 != 0
+        self.flags & libc::MS_BIND != 0
     }
     pub fn is_read_only(&self) -> bool {
-        self.flags & libc::MS_RDONLY as u64 != 0
+        self.flags & libc::MS_RDONLY != 0
     }
     pub fn is_tmpfs(&self) -> bool {
         self.fs_type == "tmpfs"
@@ -205,12 +205,9 @@ impl Builder {
         target: impl Into<String>,
         readonly: bool,
     ) -> Self {
-        let mut flags = libc::MS_BIND as u64
-            | libc::MS_NOSUID as u64
-            | libc::MS_PRIVATE as u64
-            | libc::MS_REC as u64;
+        let mut flags = libc::MS_BIND | libc::MS_NOSUID | libc::MS_PRIVATE | libc::MS_REC;
         if readonly {
-            flags |= libc::MS_RDONLY as u64;
+            flags |= libc::MS_RDONLY;
         }
         self.mounts.push(Mount {
             source: source.into(),
@@ -226,7 +223,7 @@ impl Builder {
             target: target.into(),
             fs_type: "tmpfs".into(),
             data: data.into(),
-            flags: libc::MS_NOSUID as u64 | libc::MS_NOATIME as u64 | libc::MS_NODEV as u64,
+            flags: libc::MS_NOSUID | libc::MS_NOATIME | libc::MS_NODEV,
         });
         self
     }
@@ -234,9 +231,9 @@ impl Builder {
         self.with_proc_rw(false)
     }
     pub fn with_proc_rw(mut self, can_write: bool) -> Self {
-        let mut flags = libc::MS_NOSUID as u64 | libc::MS_NODEV as u64 | libc::MS_NOEXEC as u64;
+        let mut flags = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
         if !can_write {
-            flags |= libc::MS_RDONLY as u64;
+            flags |= libc::MS_RDONLY;
         }
         self.mounts.push(Mount {
             source: "proc".into(),
@@ -290,7 +287,7 @@ mod tests {
         let m = Mount {
             source: "/src".into(),
             target: "/a/b/c".into(),
-            flags: libc::MS_BIND as u64,
+            flags: libc::MS_BIND,
             ..Default::default()
         };
         assert_eq!(m.to_string(), "bind[/src:/a/b/c:rw]");
