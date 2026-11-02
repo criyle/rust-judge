@@ -3,7 +3,7 @@ use crate::env::seccomp_policy::{self, Error as PolicyError, MobyProfile, Policy
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const DEFAULT_INPUT: &str = "seccomp/moby-default.json";
 const DEFAULT_OUTPUT: &str = "seccomp/moby.yaml";
@@ -135,7 +135,7 @@ pub fn run(options: &Options) -> Result<PolicyProfile, String> {
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound
                 && !options.input_was_explicit
-                && options.input == *DEFAULT_INPUT =>
+                && options.input == Path::new(DEFAULT_INPUT) =>
         {
             seccomp_policy::MOBY_DEFAULT_JSON.to_vec()
         }
