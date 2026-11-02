@@ -1,6 +1,6 @@
 # rust-judge
 
-> **Note:** Work on this Rust port began in 2023 and was set aside because of the scope involved. With substantial AI assistance, the current implementation came together in about 16 hours using GPT-6 Luna and less than US$20 in API usage. The Go integration tests pass; current concurrency benchmarks show rust-judge runs about 20% slower than go-judge.
+> **Note:** Work on this Rust port began in 2023 and was set aside because of the scope involved. With substantial AI assistance, the current implementation came together in about 16 hours using GPT-6 Luna and less than US$20 in API usage. The Go integration tests pass; the latest go-judge HTTP concurrency benchmark measured rust-judge 5–8% higher throughput on this host across concurrency levels 1, 2, 4, and 8. See [BENCHMARKS.md](BENCHMARKS.md) for methodology and limits.
 
 `rust-judge` is a Rust implementation of [go-judge](https://github.com/criyle/go-judge), a service and library for running programs in isolated, resource-limited Linux environments. It provides REST, WebSocket, and gRPC service code, a reusable worker API, container and execution primitives, and command-line tools.
 
@@ -35,7 +35,7 @@ The library exposes `LinuxEnvironmentPool`, `AsyncWorker`, and request/result ty
 cargo run --release --example embedded
 ```
 
-The example requires Linux namespace and mount capabilities and uses the built-in seccomp profile. Its default environment config does not configure a cgroup hierarchy, so do not treat its resource limits as a complete production resource-control policy. For production embedding, configure and delegate cgroups on the host, set `cgroup_root` or `cgroup_v1_roots`, set an appropriate container identity policy, and manage request concurrency and shutdown in the host application. See [`LinuxEnvironmentConfig`](src/env/linux_environment.rs) and [Security](SECURITY.md).
+The example requires Linux namespace and mount capabilities and uses the built-in seccomp profile. Its default environment config does not configure a cgroup hierarchy, so do not treat its resource limits as a complete production resource-control policy. For production embedding, configure and delegate cgroups on the host, set `cgroup_root` or `cgroup_v1_roots`, set an appropriate container identity policy, and manage request concurrency and shutdown in the host application. See [`LinuxEnvironmentConfig`](src/env/linux_environment/mod.rs) and [Security](SECURITY.md).
 
 Use the library API as a building block: callers own service authentication, network exposure, lifecycle, storage permissions, cgroup setup, and observability. The API is not yet covered by a semver stability promise.
 
@@ -67,7 +67,7 @@ cargo package --no-verify
 
 Sandbox unit and integration tests need the package's helper binaries available beside the test executables, so build them before running the suite. The process-level counterpart to go-judge's basic integration sanity cases can be run with `cargo test --test go_judge_sanity -- --ignored --nocapture`; it executes the server's `/run` API. CI enables unprivileged user namespaces, builds the binaries, runs the unit suite and both integration tests, and verifies package contents on stable. It skips only the host-specific credential mapping and executable-file tests listed in [`.github/namespace-test-skips.txt`](.github/namespace-test-skips.txt); all 262 unit tests pass on a capable Linux host. Rust 1.88 checks compilation against the declared minimum version.
 
-See [`BENCHMARKS.md`](BENCHMARKS.md) for benchmark methodology and current measurements. The Rust runner currently uses the standard process-spawn path with setup hooks and does not use Go's optimized `clone3`/`vfork` launch path. If you need a mature service today or depend on that optimized launch behavior, use [upstream go-judge](https://github.com/criyle/go-judge).
+See [`BENCHMARKS.md`](BENCHMARKS.md) for benchmark methodology and current measurements. On Linux x86-64, independent workload launches use a raw `clone3(CLONE_VM | CLONE_VFORK)` path with a separate child stack; cgroup v2 directory descriptors use `CLONE_INTO_CGROUP` when available. Launches requiring parent coordination retain the standard-library fork/exec path.
 
 ## License
 
