@@ -67,7 +67,7 @@ cargo package --no-verify
 
 Sandbox unit and integration tests need the package's helper binaries available beside the test executables, so build them before running the suite. The process-level counterpart to go-judge's basic integration sanity cases can be run with `cargo test --test go_judge_sanity -- --ignored --nocapture`; it executes the server's `/run` API. CI enables unprivileged user namespaces, builds the binaries, runs the unit suite and both integration tests, and verifies package contents on stable. It skips only the host-specific credential mapping and executable-file tests listed in [`.github/namespace-test-skips.txt`](.github/namespace-test-skips.txt); all 262 unit tests pass on a capable Linux host. Rust 1.88 checks compilation against the declared minimum version.
 
-See [`BENCHMARKS.md`](BENCHMARKS.md) for benchmark methodology and current measurements. On Linux x86-64, independent workload launches use a raw `clone3(CLONE_VM | CLONE_VFORK)` path with a separate child stack; cgroup v2 directory descriptors use `CLONE_INTO_CGROUP` when available. Launches requiring parent coordination retain the standard-library fork/exec path.
+See [`BENCHMARKS.md`](BENCHMARKS.md) for benchmark methodology and current measurements. On Linux x86-64 and aarch64, independent workload launches use a raw `clone3(CLONE_VM | CLONE_VFORK)` path with a separate child stack; cgroup v2 directory descriptors use `CLONE_INTO_CGROUP` when available. Launches requiring parent coordination retain the standard-library fork/exec path.
 
 ## License
 

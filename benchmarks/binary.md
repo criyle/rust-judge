@@ -235,15 +235,27 @@ otherwise idle host before making a launch-performance claim.
 
 ## clone3/vfork launch path — 2026-11-01
 
-`Runner::start` now uses a raw Linux x86-64 `clone3(CLONE_VM | CLONE_VFORK)`
-launcher for executions that do not need parent coordination. The child runs
-on a separately mapped stack, uses prepared arguments and syscalls through
-exec, reports setup/exec errno through a close-on-exec pipe, then immediately
-calls `execve`. This path does not allocate, lock, unwind, or alter the parent's
-`errno`. Modes needing a sync callback, user-namespace mapping, or namespace
-helper keep the standard-library fork/exec path. Kernels or sandboxes that
-reject clone3 use `clone(CLONE_VM | CLONE_VFORK)`; non-x86-64 targets use the
+`Runner::start` uses a raw Linux `clone3(CLONE_VM | CLONE_VFORK)` launcher
+on x86-64 and aarch64 for executions that do not need parent coordination.
+The child runs on a separately mapped stack, uses prepared arguments and raw
+syscalls through exec, reports setup/exec errno through a close-on-exec pipe,
+then immediately calls `execve`. This path does not allocate, lock, unwind, or
+alter the parent's `errno`. Modes needing a sync callback, user-namespace
+mapping, or namespace helper keep the standard-library fork/exec path. The
+clone3 feature probe is cached; if clone3 is unavailable or denied, launch falls
+back to `clone(CLONE_VM | CLONE_VFORK)`. Other architectures use the
 standard-library path.
+
+#### Post-fork safety and architecture support
+
+The x86-64 and aarch64 assembly trampolines enter the child callback on the
+separately mapped stack. The callback only reads prebuilt state and performs
+the setup syscalls needed before exec. `CLONE_VFORK` keeps the parent suspended
+while the child shares its address space, and the close-on-exec error pipe
+reports setup failures without requiring a child-side allocation or lock. The
+parent resumes once exec succeeds or the child exits. The implementation lives
+in [`vfork.rs`](../src/container/fork_exec/vfork.rs); Runner selects it only for
+independent launches in [`start.rs`](../src/container/fork_exec/runner/start.rs).
 
 When the caller supplies a cgroup v2 directory descriptor, clone3 adds
 `CLONE_INTO_CGROUP`. If the kernel rejects that flag or descriptor, the child
