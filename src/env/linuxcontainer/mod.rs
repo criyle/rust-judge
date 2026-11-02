@@ -10,7 +10,14 @@ use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
+use std::{
+    collections::VecDeque,
+    sync::mpsc::{self, Receiver, SyncSender},
+    thread::JoinHandle,
+};
 
 #[derive(Debug)]
 pub enum EnvError {
@@ -129,9 +136,58 @@ pub(crate) fn validate_cgroup_name(name: &str) -> Result<(), EnvError> {
     Ok(())
 }
 pub trait CgroupPool: Send + Sync {
-    fn get(&self) -> Result<Box<dyn Cgroup>, EnvError>;
-    fn put(&self, cgroup: Box<dyn Cgroup>);
+    fn get(&self) -> Result<CgroupLease, EnvError>;
+    fn put(&self, cgroup: CgroupLease);
     fn shutdown(&self) -> Result<(), EnvError>;
+}
+
+/// A cgroup checked out for one command. `slot` is set for a cgroup owned by
+/// a bounded pool slot and absent for a one-off overflow allocation.
+pub struct CgroupLease {
+    cgroup: Option<Box<dyn Cgroup>>,
+    slot: Option<usize>,
+}
+
+impl CgroupLease {
+    /// Wrap a cgroup returned by a custom pool implementation.
+    pub fn new(cgroup: Box<dyn Cgroup>) -> Self {
+        Self::standalone(cgroup)
+    }
+
+    fn pooled(cgroup: Box<dyn Cgroup>, slot: usize) -> Self {
+        Self {
+            cgroup: Some(cgroup),
+            slot: Some(slot),
+        }
+    }
+
+    fn standalone(cgroup: Box<dyn Cgroup>) -> Self {
+        Self {
+            cgroup: Some(cgroup),
+            slot: None,
+        }
+    }
+
+    fn into_parts(mut self) -> (Box<dyn Cgroup>, Option<usize>) {
+        (
+            self.cgroup.take().expect("cgroup lease consumed once"),
+            self.slot,
+        )
+    }
+}
+
+impl std::ops::Deref for CgroupLease {
+    type Target = dyn Cgroup;
+
+    fn deref(&self) -> &Self::Target {
+        self.cgroup.as_deref().expect("live cgroup lease")
+    }
+}
+
+impl std::ops::DerefMut for CgroupLease {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.cgroup.as_deref_mut().expect("live cgroup lease")
+    }
 }
 
 mod cgroup_v2;
@@ -377,13 +433,14 @@ impl ListCgroupPool {
     }
 }
 impl CgroupPool for ListCgroupPool {
-    fn get(&self) -> Result<Box<dyn Cgroup>, EnvError> {
+    fn get(&self) -> Result<CgroupLease, EnvError> {
         if let Some(cg) = self.idle.lock().map_err(|_| EnvError::Poisoned)?.pop() {
-            return Ok(cg);
+            return Ok(CgroupLease::new(cg));
         }
-        self.builder.random("")
+        self.builder.random("").map(CgroupLease::new)
     }
-    fn put(&self, mut cgroup: Box<dyn Cgroup>) {
+    fn put(&self, cgroup: CgroupLease) {
+        let (mut cgroup, _) = cgroup.into_parts();
         if cgroup.reset().is_err() {
             let _ = cgroup.destroy();
             return;
@@ -421,16 +478,294 @@ impl FreshCgroupPool {
 }
 
 impl CgroupPool for FreshCgroupPool {
-    fn get(&self) -> Result<Box<dyn Cgroup>, EnvError> {
-        self.builder.random("")
+    fn get(&self) -> Result<CgroupLease, EnvError> {
+        self.builder.random("").map(CgroupLease::new)
     }
 
-    fn put(&self, cgroup: Box<dyn Cgroup>) {
+    fn put(&self, cgroup: CgroupLease) {
+        let (cgroup, _) = cgroup.into_parts();
         let _ = cgroup.destroy();
     }
 
     fn shutdown(&self) -> Result<(), EnvError> {
         Ok(())
+    }
+}
+
+struct AsyncCgroupState {
+    idle: VecDeque<(usize, Box<dyn Cgroup>)>,
+    slots: Vec<AsyncCgroupSlot>,
+    stopped: bool,
+    error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AsyncCgroupSlot {
+    Starting,
+    Idle,
+    Leased,
+    Recycling,
+    Failed,
+    Stopped,
+}
+
+enum AsyncCgroupMessage {
+    Returned(Box<dyn Cgroup>),
+    Stop,
+}
+
+/// Keeps a bounded set of fresh cgroups ready and replaces returned cgroups
+/// on background workers. If every warm slot is leased, `get` creates a
+/// one-off cgroup synchronously so a multi-command request cannot wait for one
+/// of its own processes to finish before it can start the rest.
+pub struct AsyncFreshCgroupPool {
+    builder: Arc<dyn CgroupBuilder>,
+    state: Arc<Mutex<AsyncCgroupState>>,
+    ready: Arc<std::sync::Condvar>,
+    put_lock: Mutex<()>,
+    releases: Vec<SyncSender<AsyncCgroupMessage>>,
+    workers: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl AsyncFreshCgroupPool {
+    pub fn new(builder: Box<dyn CgroupBuilder>, worker_count: usize) -> Self {
+        let worker_count = worker_count.max(1);
+        let builder: Arc<dyn CgroupBuilder> = Arc::from(builder);
+        let pool = Self {
+            builder: builder.clone(),
+            state: Arc::new(Mutex::new(AsyncCgroupState {
+                idle: VecDeque::with_capacity(worker_count),
+                slots: vec![AsyncCgroupSlot::Starting; worker_count],
+                stopped: false,
+                error: None,
+            })),
+            ready: Arc::new(std::sync::Condvar::new()),
+            put_lock: Mutex::new(()),
+            releases: Vec::with_capacity(worker_count),
+            workers: Mutex::new(Vec::with_capacity(worker_count)),
+        };
+
+        let mut releases = Vec::with_capacity(worker_count);
+        let mut workers = Vec::with_capacity(worker_count);
+        for slot in 0..worker_count {
+            let (release_tx, release_rx) = mpsc::sync_channel(1);
+            let builder = builder.clone();
+            let state = pool.state.clone();
+            let ready = pool.ready.clone();
+            let worker = thread::spawn(move || {
+                async_cgroup_worker(slot, builder, release_rx, state, ready);
+            });
+            releases.push(release_tx);
+            workers.push(worker);
+        }
+        let mut pool = pool;
+        pool.releases = releases;
+        *pool.workers.lock().expect("new cgroup worker mutex") = workers;
+        pool
+    }
+
+    fn shutdown_inner(&self) -> Result<(), EnvError> {
+        let _put_guard = self.put_lock.lock().map_err(|_| EnvError::Poisoned)?;
+        let idle = {
+            let mut state = self.state.lock().map_err(|_| EnvError::Poisoned)?;
+            state.stopped = true;
+            self.ready.notify_all();
+            for slot in &mut state.slots {
+                if !matches!(*slot, AsyncCgroupSlot::Leased | AsyncCgroupSlot::Recycling) {
+                    *slot = AsyncCgroupSlot::Stopped;
+                }
+            }
+            std::mem::take(&mut state.idle)
+        };
+        let mut first_error = None;
+        for (_, cgroup) in idle {
+            if let Err(error) = cgroup.destroy() {
+                first_error.get_or_insert(error);
+            }
+        }
+        for sender in &self.releases {
+            let _ = sender.send(AsyncCgroupMessage::Stop);
+        }
+        for worker in self
+            .workers
+            .lock()
+            .map_err(|_| EnvError::Poisoned)?
+            .drain(..)
+        {
+            if worker.join().is_err() && first_error.is_none() {
+                first_error = Some(EnvError::Backend("cgroup worker panicked".into()));
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+impl CgroupPool for AsyncFreshCgroupPool {
+    fn get(&self) -> Result<CgroupLease, EnvError> {
+        let mut state = self.state.lock().map_err(|_| EnvError::Poisoned)?;
+        loop {
+            if let Some((slot, cgroup)) = state.idle.pop_front() {
+                state.slots[slot] = AsyncCgroupSlot::Leased;
+                // Other waiters may now observe that every warm slot is
+                // leased and need to switch to one-off overflow creation.
+                self.ready.notify_all();
+                return Ok(CgroupLease::pooled(cgroup, slot));
+            }
+            if state.stopped {
+                return Err(EnvError::Backend("cgroup pool is shut down".into()));
+            }
+            if let Some(error) = state.error.as_ref() {
+                return Err(EnvError::Backend(error.clone()));
+            }
+            if state
+                .slots
+                .iter()
+                .all(|slot| *slot == AsyncCgroupSlot::Leased)
+            {
+                // Every warm slot is held by a live command. Groups may
+                // contain more commands than the server worker count, so
+                // allocate an overflow cgroup instead of waiting for a
+                // command in the same group to finish and deadlocking pipes.
+                drop(state);
+                return self.builder.random("").map(CgroupLease::new);
+            }
+            state = self.ready.wait(state).map_err(|_| EnvError::Poisoned)?;
+        }
+    }
+
+    fn put(&self, cgroup: CgroupLease) {
+        let (cgroup, slot) = cgroup.into_parts();
+        let Ok(_put_guard) = self.put_lock.lock() else {
+            let _ = cgroup.destroy();
+            return;
+        };
+        let Some(slot) = slot else {
+            // Overflow cgroups do not occupy a warm-pool slot and must not
+            // trigger a replacement cgroup.
+            let _ = cgroup.destroy();
+            return;
+        };
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                let _ = cgroup.destroy();
+                return;
+            }
+        };
+        if state.stopped || state.slots.get(slot) != Some(&AsyncCgroupSlot::Leased) {
+            drop(state);
+            let _ = cgroup.destroy();
+            return;
+        }
+        state.slots[slot] = AsyncCgroupSlot::Recycling;
+        drop(state);
+
+        let sender = &self.releases[slot];
+        if let Err(error) = sender.try_send(AsyncCgroupMessage::Returned(cgroup)) {
+            let cgroup = match error {
+                mpsc::TrySendError::Full(AsyncCgroupMessage::Returned(cgroup))
+                | mpsc::TrySendError::Disconnected(AsyncCgroupMessage::Returned(cgroup)) => cgroup,
+                mpsc::TrySendError::Full(AsyncCgroupMessage::Stop)
+                | mpsc::TrySendError::Disconnected(AsyncCgroupMessage::Stop) => return,
+            };
+            if let Ok(mut state) = self.state.lock() {
+                state.slots[slot] = AsyncCgroupSlot::Failed;
+                state
+                    .error
+                    .get_or_insert_with(|| "cgroup worker stopped".into());
+                self.ready.notify_all();
+            }
+            let _ = cgroup.destroy();
+        }
+    }
+
+    fn shutdown(&self) -> Result<(), EnvError> {
+        self.shutdown_inner()
+    }
+}
+
+impl Drop for AsyncFreshCgroupPool {
+    fn drop(&mut self) {
+        let _ = self.shutdown_inner();
+    }
+}
+
+fn async_cgroup_worker(
+    slot: usize,
+    builder: Arc<dyn CgroupBuilder>,
+    releases: Receiver<AsyncCgroupMessage>,
+    state: Arc<Mutex<AsyncCgroupState>>,
+    ready: Arc<std::sync::Condvar>,
+) {
+    loop {
+        let cgroup = match builder.random("") {
+            Ok(cgroup) => cgroup,
+            Err(error) => {
+                if let Ok(mut state) = state.lock() {
+                    state.error.get_or_insert_with(|| error.to_string());
+                    state.slots[slot] = AsyncCgroupSlot::Failed;
+                    ready.notify_all();
+                }
+                drain_cgroup_releases(&releases);
+                return;
+            }
+        };
+        {
+            let mut state = match state.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    let _ = cgroup.destroy();
+                    drain_cgroup_releases(&releases);
+                    return;
+                }
+            };
+            if state.stopped {
+                drop(state);
+                let _ = cgroup.destroy();
+                drain_cgroup_releases(&releases);
+                return;
+            }
+            state.slots[slot] = AsyncCgroupSlot::Idle;
+            state.idle.push_back((slot, cgroup));
+            ready.notify_one();
+        }
+
+        match releases.recv() {
+            Ok(AsyncCgroupMessage::Returned(cgroup)) => {
+                let _ = cgroup.destroy();
+                let mut state = match state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        drain_cgroup_releases(&releases);
+                        return;
+                    }
+                };
+                if state.stopped {
+                    state.slots[slot] = AsyncCgroupSlot::Stopped;
+                    drop(state);
+                    drain_cgroup_releases(&releases);
+                    return;
+                }
+                state.slots[slot] = AsyncCgroupSlot::Starting;
+                ready.notify_all();
+            }
+            Ok(AsyncCgroupMessage::Stop) | Err(_) => {
+                if let Ok(mut state) = state.lock() {
+                    state.slots[slot] = AsyncCgroupSlot::Stopped;
+                    ready.notify_all();
+                }
+                drain_cgroup_releases(&releases);
+                return;
+            }
+        }
+    }
+}
+
+fn drain_cgroup_releases(releases: &Receiver<AsyncCgroupMessage>) {
+    while let Ok(message) = releases.try_recv() {
+        if let AsyncCgroupMessage::Returned(cgroup) = message {
+            let _ = cgroup.destroy();
+        }
     }
 }
 
@@ -500,6 +835,107 @@ mod fresh_cgroup_pool_tests {
         pool.put(cgroup);
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         pool.shutdown().unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod async_fresh_cgroup_pool_tests {
+    use super::*;
+    use std::os::fd::AsRawFd;
+    use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn precreates_and_replaces_fresh_cgroups_on_background_worker() {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "rust-sandbox-async-cgroup-pool-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let pool = AsyncFreshCgroupPool::new(Box::new(CgroupV2Builder::new(&root)), 1);
+
+        let first = pool.get().unwrap();
+        let first_fd = first.open().unwrap();
+        let first_path = fs::read_link(format!("/proc/self/fd/{}", first_fd.as_raw_fd())).unwrap();
+        drop(first_fd);
+        pool.put(first);
+
+        let second = pool.get().unwrap();
+        let second_fd = second.open().unwrap();
+        let second_path =
+            fs::read_link(format!("/proc/self/fd/{}", second_fd.as_raw_fd())).unwrap();
+        assert_ne!(first_path, second_path);
+        drop(second_fd);
+        pool.put(second);
+
+        pool.shutdown().unwrap();
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn allocates_overflow_cgroups_when_all_warm_slots_are_leased() {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "rust-sandbox-async-cgroup-overflow-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let pool = AsyncFreshCgroupPool::new(Box::new(CgroupV2Builder::new(&root)), 1);
+
+        let pooled = pool.get().unwrap();
+        let overflow = pool.get().unwrap();
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+
+        // Overflow leases are one-shot: returning one removes it without
+        // creating another warm slot.
+        pool.put(overflow);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+
+        pool.put(pooled);
+        let replacement = pool.get().unwrap();
+        pool.put(replacement);
+        pool.shutdown().unwrap();
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_checkouts_do_not_sleep_after_the_last_warm_slot_is_leased() {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "rust-sandbox-async-cgroup-parallel-overflow-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let pool = Arc::new(AsyncFreshCgroupPool::new(
+            Box::new(CgroupV2Builder::new(&root)),
+            1,
+        ));
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let (tx, rx) = std::sync::mpsc::channel();
+        for _ in 0..2 {
+            let pool = pool.clone();
+            let barrier = barrier.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                tx.send(pool.get()).unwrap();
+            });
+        }
+        drop(tx);
+        barrier.wait();
+
+        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        let second = rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        pool.put(first);
+        pool.put(second);
+        pool.shutdown().unwrap();
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         fs::remove_dir(root).unwrap();
     }
 }

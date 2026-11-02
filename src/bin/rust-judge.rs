@@ -114,6 +114,7 @@ fn run(mut config: Config) -> std::io::Result<()> {
         ..LinuxEnvironmentConfig::default()
     };
     environment_config.tmpfs_data = config.tmp_fs_param.clone();
+    environment_config.cgroup_pool_size = config.parallelism.max(1);
     environment_config.net_share = config.net_share;
     environment_config.no_seccomp = config.no_seccomp;
     environment_config.container_init_path = Some(container_init_executable(&config)?);

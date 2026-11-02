@@ -5,7 +5,7 @@ struct RemoteProcessState {
     finished_at: Option<u64>,
     usage: Usage,
     started: Instant,
-    cgroup: Option<Box<dyn Cgroup>>,
+    cgroup: Option<CgroupLease>,
     cgroup_pool: Option<Arc<dyn CgroupPool>>,
 }
 
@@ -18,7 +18,7 @@ pub(super) struct RemoteProcess {
 
 impl RemoteProcess {
     pub(super) fn new(
-        cgroup: Option<Box<dyn Cgroup>>,
+        cgroup: Option<CgroupLease>,
         cgroup_pool: Option<Arc<dyn CgroupPool>>,
     ) -> (Self, tokio::sync::watch::Receiver<bool>) {
         let (cancel, receiver) = tokio::sync::watch::channel(false);

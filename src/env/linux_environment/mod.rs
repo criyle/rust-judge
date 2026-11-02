@@ -15,7 +15,8 @@ use crate::container::{
     unix_socket::Socket,
 };
 use crate::env::linuxcontainer::{
-    Cgroup, CgroupPool, CgroupV2Builder, ExecutionLimits, FreshCgroupPool, set_cgroup_limits,
+    AsyncFreshCgroupPool, CgroupBuilder, CgroupLease, CgroupPool, CgroupV2Builder, ExecutionLimits,
+    set_cgroup_limits,
 };
 use crate::env::{DEFAULT_WORK_DIR, MountOperation, default_mounts, filter_missing_sources};
 use crate::envexec::{
@@ -79,6 +80,9 @@ pub struct LinuxEnvironmentConfig {
     pub cgroup_v1_roots: Option<crate::env::cgroup_v1::ControllerPaths>,
     pub enable_cpu_rate: bool,
     pub cpu_cfs_period: Duration,
+    /// Number of background cgroup creation workers. The service sets this to
+    /// its command parallelism; embedded users default to one worker.
+    pub cgroup_pool_size: usize,
     pub no_fallback: bool,
     /// Host UID/GID allocation base used by go-judge's container credential
     /// generator. Each newly built environment receives `start + 1`, then the
@@ -115,6 +119,7 @@ impl Default for LinuxEnvironmentConfig {
             cgroup_v1_roots: None,
             enable_cpu_rate: false,
             cpu_cfs_period: Duration::from_millis(100),
+            cgroup_pool_size: 1,
             no_fallback: false,
             container_cred_start: None,
             host_credential_id: None,
@@ -160,6 +165,7 @@ struct NamespaceKeeper {
 /// returning it to the pool drops it and removes the root tree.
 pub struct LinuxEnvironmentPool {
     config: LinuxEnvironmentConfig,
+    cgroup_pool: Option<Arc<dyn CgroupPool>>,
     next_credential_id: AtomicU32,
     idle: Mutex<Vec<Arc<LinuxEnvironment>>>,
     leased: Mutex<HashMap<usize, std::sync::Weak<LinuxEnvironment>>>,
@@ -168,9 +174,11 @@ pub struct LinuxEnvironmentPool {
 impl LinuxEnvironmentPool {
     pub fn new(config: LinuxEnvironmentConfig) -> io::Result<Self> {
         fs::create_dir_all(&config.root_parent)?;
+        let cgroup_pool = create_cgroup_pool(&config);
         Ok(Self {
             next_credential_id: AtomicU32::new(config.container_cred_start.unwrap_or(0)),
             config,
+            cgroup_pool,
             idle: Mutex::new(Vec::new()),
             leased: Mutex::new(HashMap::new()),
         })
@@ -209,7 +217,10 @@ impl crate::worker::EnvironmentPool for LinuxEnvironmentPool {
                     }
                     config.host_credential_id = Some(previous + 1);
                 }
-                Arc::new(LinuxEnvironment::build(config)?)
+                Arc::new(LinuxEnvironment::build_with_cgroup_pool(
+                    config,
+                    self.cgroup_pool.clone(),
+                )?)
             }
         };
         let key = Arc::as_ptr(&environment) as usize;
@@ -250,16 +261,7 @@ impl LinuxEnvironment {
                 )
             })?);
         }
-        let cgroup_pool = if let Some(roots) = config.cgroup_v1_roots.as_ref() {
-            Some(Arc::new(FreshCgroupPool::new(Box::new(
-                crate::env::cgroup_v1::CgroupV1Builder::new(roots.clone()),
-            ))) as Arc<dyn CgroupPool>)
-        } else {
-            config.cgroup_root.as_ref().map(|root| {
-                Arc::new(FreshCgroupPool::new(Box::new(CgroupV2Builder::new(root))))
-                    as Arc<dyn CgroupPool>
-            })
-        };
+        let cgroup_pool = create_cgroup_pool(&config);
         let environment = Self::build_with_cgroup_pool(config, cgroup_pool)?;
         crate::runtime_metrics::environment_built();
         Ok(environment)
@@ -971,6 +973,20 @@ impl LinuxEnvironment {
     }
 }
 
+fn create_cgroup_pool(config: &LinuxEnvironmentConfig) -> Option<Arc<dyn CgroupPool>> {
+    let builder: Box<dyn CgroupBuilder> = if let Some(roots) = config.cgroup_v1_roots.as_ref() {
+        Box::new(crate::env::cgroup_v1::CgroupV1Builder::new(roots.clone()))
+    } else if let Some(root) = config.cgroup_root.as_ref() {
+        Box::new(CgroupV2Builder::new(root))
+    } else {
+        return None;
+    };
+    Some(Arc::new(AsyncFreshCgroupPool::new(
+        builder,
+        config.cgroup_pool_size.max(1),
+    )))
+}
+
 impl Drop for LinuxEnvironment {
     fn drop(&mut self) {
         if let Ok(keeper) = self.keeper.get_mut()
@@ -979,9 +995,6 @@ impl Drop for LinuxEnvironment {
             kill_namespace_init(keeper.pid);
             let _ = keeper.child.kill();
             let _ = keeper.child.wait();
-        }
-        if let Some(pool) = self.cgroup_pool.as_ref() {
-            let _ = pool.shutdown();
         }
         let _ = fs::remove_dir_all(&self.root);
     }

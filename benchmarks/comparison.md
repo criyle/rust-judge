@@ -331,3 +331,186 @@ and Criterion smoke harness passed. The full default-seccomp Go integration
 package passed in 36.5 seconds on 2026-10-30. This single before/after suite
 pair is too small to claim a throughput improvement from moving pool operations
 off Tokio workers.
+
+## 2026-11-01 asynchronous fresh-cgroup pool experiment
+
+When cgroups are configured, Rust's production environment pool now
+pre-creates one fresh cgroup per configured worker and destroys each
+returned cgroup on a background thread before that worker creates its
+replacement. The pool is shared across the service's environments, and
+`cgroup_pool_size` follows `--parallelism`. It preserves fresh per-command
+accounting and does not reuse cgroup state.
+
+Compared release go-judge with release rust-judge on the same Ryzen 5 5625U
+host, parallelism 12, and `-net-share`. I ran the Go integration
+`BenchmarkGoJudge_Concurrency` twice against each server (`-cpu 1
+-benchtime=1s -count=3`), reversing which server ran first on the second pair.
+The table uses the median of six samples per server:
+
+| Concurrency | Go median | Go TPS | Rust async-pool median | Rust TPS | Rust TPS difference |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.334 ms/op | 749 | 1.044 ms/op | 958 | +27.9% |
+| 2 | 0.791 ms/op | 1,264 | 0.652 ms/op | 1,535 | +21.4% |
+| 4 | 0.587 ms/op | 1,703 | 0.519 ms/op | 1,927 | +13.2% |
+| 8 | 0.513 ms/op | 1,949 | 0.501 ms/op | 1,996 | +2.4% |
+
+The order-balanced run favors the async-pool Rust build at all four
+concurrency levels, with a much smaller gain at 8. An earlier no-pool Rust
+comparison on this host measured 1.229, 0.740, 0.507, and 0.475 ms/op. Against
+that separate run, the async pool improved latency at 1 and 2, while 4 and 8
+were slightly slower; the cross-run difference is small enough at higher
+concurrency that it needs a stable-host A/B run before claiming a pool-only
+throughput gain.
+
+The Rust pool lifecycle unit test, all 262 library tests, all 7 binary tests,
+format check, release build, and full Go integration run passed with the pool
+enabled. A later rerun failed at the helper executable's read-only bind
+remount. The benchmark harness had copied the server into `/tmp`, which is a
+separate `tmpfs` mount with `nosuid,nodev`; inside the new user and mount
+namespace those inherited mount flags are locked, so the raw
+`MS_REMOUNT|MS_BIND|MS_RDONLY` call returns `EPERM`. This matches the Linux
+`mount(2)`/`mount_setattr(2)` locked-mount rules. The same release binary from
+the repository's `/`-backed ext4 mount passed the full integration suite, while
+copying that binary to `/tmp` reproduced the focused failure. The fresh-on-
+demand control binary copied to `/tmp` failed the same way, confirming it was
+the launch path used for testing rather than the cgroup pool. The final pool
+shutdown path uses explicit worker stop messages instead of timed polling;
+this changes idle shutdown behavior, not the benchmark execution path.
+
+## 2026-11-02 cgroup warm-pool size sweep
+
+I held the service parallelism at 12 and swept the Rust warm-pool size across
+1, 4, and 12. For Go, the cached-pool channel capacity was swept across the
+same values while keeping its 12 creator workers fixed; the Go pool may hold
+up to `workers + channel capacity` cgroups (13, 16, and 24 respectively).
+The Go integration benchmark ran against each server at request concurrency
+1, 4, and 8 (`-cpu 1 -benchtime=1s -count=3`). Values below are medians of
+three samples in this run, so treat small differences as directional rather
+than statistically conclusive.
+
+| Implementation / warm size | Concurrency 1 | Concurrency 4 | Concurrency 8 |
+| --- | ---: | ---: | ---: |
+| Go uncached | 1.272 ms/op | 0.525 ms/op | 0.497 ms/op |
+| Go cached, channel capacity 1 | 1.188 ms/op | 0.494 ms/op | 0.480 ms/op |
+| Go cached, channel capacity 4 | 1.202 ms/op | 0.487 ms/op | 0.481 ms/op |
+| Go cached, channel capacity 12 | 1.225 ms/op | 0.494 ms/op | 0.563 ms/op |
+| Rust warm pool 1 | 1.022 ms/op | 0.480 ms/op | 0.512 ms/op |
+| Rust warm pool 4 | 1.032 ms/op | 0.509 ms/op | 0.487 ms/op |
+| Rust warm pool 12 (default) | 1.032 ms/op | 0.486 ms/op | 0.500 ms/op |
+
+The Rust default is 12 ready/replenished cgroups, one per configured service
+parallelism slot; it has no separate channel-capacity setting. When all warm
+Rust slots are leased, additional concurrent requests get one-off cgroups,
+which are destroyed on return. This avoids blocking grouped requests whose
+command count exceeds the warm-pool size. Thus a smaller Rust pool is not a
+strict maximum on concurrent cgroup demand.
+
+Across this sweep, the three Rust pool sizes are within roughly 5% at each
+concurrency and the direction changes between points. Go capacities 1 and 4
+were about 3–7% faster than its uncached pool in this run; capacity 12 was
+noisy at concurrency 8 and showed no reliable advantage. These results suggest
+that keeping a modest number of cgroups ready helps Go, while increasing the
+pool to 12 does not show a repeatable gain here. Rust's async replenishment and
+overflow path make warm-pool size less visible in this short request benchmark.
+This is a single sweep on one host, and the Go and Rust samples are not an
+order-balanced A/B series; do not interpret their small cross-implementation
+differences as a precise speedup estimate.
+
+## 2026-11-02 Go cgroup-cache worker/capacity matrix
+
+To separate Go's cache buffer capacity from its cgroup-creation worker count, I
+ran the Go integration concurrency benchmark against a temporary cached-pool
+build at service parallelism 12. The 3x3 matrix uses creator-worker counts
+1/4/12 and cache channel capacities 1/4/12. Each point is the median of three
+one-second samples (`-cpu 1 -benchtime=1s -count=3`); latencies are ms/op.
+
+| Creator workers | Cache capacity | Request concurrency 1 | Request concurrency 4 | Request concurrency 8 |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1.246 | 0.509 | 0.463 |
+| 1 | 4 | 1.264 | 0.507 | 0.473 |
+| 1 | 12 | 1.263 | 0.532 | 0.467 |
+| 4 | 1 | 1.287 | 0.531 | 0.504 |
+| 4 | 4 | 1.291 | 0.525 | 0.490 |
+| 4 | 12 | 1.279 | 0.540 | 0.493 |
+| 12 | 1 | 1.289 | 0.532 | 0.541 |
+| 12 | 4 | 1.281 | 0.555 | 0.541 |
+| 12 | 12 | 1.385 | 0.600 | 0.579 |
+
+Go's cached pool has one cgroup under construction per worker and a buffered
+channel for ready cgroups, so it can retain approximately `workers + capacity`
+cgroups. For example, workers=1/capacity=1 produced two child cgroups in a
+live server; workers=12/capacity=12 can produce up to 24. The matrix shows no
+reliable benefit from enlarging the channel. Increasing the worker count to 12
+was slower at every tested concurrency, especially with capacity 12. This is
+consistent with extra background cgroup creation and a larger ready set adding
+kernel and memory-management work, though this benchmark alone does not isolate
+that cause. The lowest measured point was workers=1/capacity=1 at concurrency
+8; its result should be confirmed with an order-balanced repeat before tuning
+production defaults.
+
+Rust does use background creator workers. In `AsyncFreshCgroupPool`, each
+configured pool slot has a dedicated thread that creates one fresh cgroup,
+marks the slot ready, then creates a replacement after the leased cgroup is
+returned. Rust has no independent buffer-capacity knob: `cgroup_pool_size`
+sets both the number of background creator threads and the maximum warm slots.
+If every slot is leased, Rust creates an overflow cgroup synchronously and
+destroys it on return, so the warm-slot count does not cap concurrent demand.
+The earlier Rust size sweep therefore varied worker count and warm capacity
+together; it did not test them as independent axes. Separating those axes in
+Rust would require redesigning its slot/replenishment model, and this Go matrix
+does not by itself establish a reason to do that.
+
+## 2026-11-02 Go cached pool vs Rust at parallelism 8
+
+I compared release servers on the Ryzen 5 5625U with `--net-share`, service
+parallelism 8, and the Go integration benchmark at request concurrency 8. Go
+used the temporary cached-pool build with one creator worker and cache capacity
+8; Rust used its default eight warm slots (eight creator threads). Each server
+had three benchmark runs, each with three 2-second samples (`-cpu 1
+-benchtime=2s -count=3`). I ran the servers in alternating order. The nine
+samples per implementation give these medians:
+
+| Server | Median latency | Median throughput | Sample range |
+| --- | ---: | ---: | ---: |
+| Go, cached pool (1 worker, capacity 8) | 0.495 ms/op | 2,021 requests/s | 0.461–0.530 ms/op |
+| Rust (8 warm slots) | 0.537 ms/op | 1,864 requests/s | 0.518–0.598 ms/op |
+
+In this run Rust was 8.5% slower by median latency, or about 7.8% lower by
+median throughput. The ranges overlap and samples vary, so this is a measured
+result for these builds and settings, not a definitive general ranking.
+
+For memory, I reset and read `memory.peak` on the service's parent cgroup
+scope after pool startup and before the benchmark. This scope includes the
+server process, namespace init processes, command processes, and kernel memory
+charged to their cgroups. The median of three runs was 99.0 MiB for Go and
+36.3 MiB for Rust, about 63% lower for Rust. In one additional sampled run,
+the sum of process RSS across the service scope peaked at 251.6 MiB for Go and
+137.2 MiB for Rust. Summed RSS counts shared mapped pages once per process, so
+it overstates unique physical memory; the hierarchical cgroup `memory.peak` is
+the better whole-service comparison. The cgroup peak also includes kernel
+charges, so it is broader than process RSS.
+
+The Go cache implementation and pool-size overrides were built in a temporary
+worktree for measurement and were removed afterward; this is not a benchmark of
+a merged Go change. The benchmark harness was the go-judge integration
+`BenchmarkGoJudge_Concurrency` run against both servers.
+
+### Main process and container-init memory breakdown
+
+I separately sampled each service's main process and the processes whose command
+line contains `container_init` during the same parallelism-8 workload. RSS and
+PSS were read from `/proc/<pid>/smaps_rollup` at 20 ms intervals. The values are
+peaks for each role; init totals sum all init processes observed at the sample
+where that role's aggregate peaked.
+
+| Server | Main RSS peak | Main PSS peak | Container-inits at aggregate peak | Init RSS sum peak | Init PSS sum peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Go, cached pool (1 worker, capacity 8) | 37.1 MiB | 19.7 MiB | 8 | 213.3 MiB | 74.9 MiB |
+| Rust (8 warm slots) | 21.1 MiB | 14.8 MiB | 16 | 63.2 MiB | 10.0 MiB |
+
+Summed RSS can count shared executable and library pages once for each init;
+PSS apportions those shared pages across processes. The PSS figures are therefore
+more meaningful for comparing process memory, while the earlier cgroup
+`memory.peak` also includes kernel charges and command processes. The 20 ms
+sampling can miss brief process peaks, but the long-lived server and init
+processes were present throughout the benchmark.
