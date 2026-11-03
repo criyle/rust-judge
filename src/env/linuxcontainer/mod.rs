@@ -46,6 +46,16 @@ impl From<std::io::Error> for EnvError {
 pub trait Cgroup: Send {
     fn set_cpuset(&mut self, cpus: &str) -> Result<(), EnvError>;
     fn set_memory_limit(&mut self, bytes: u64) -> Result<(), EnvError>;
+    fn check_memory_swap_limit(&self) -> Result<(), EnvError> {
+        Err(EnvError::Unsupported(
+            "cgroup memory swap limit is unavailable",
+        ))
+    }
+    fn set_memory_swap_limit(&mut self, _memory_bytes: u64) -> Result<(), EnvError> {
+        Err(EnvError::Unsupported(
+            "cgroup memory swap limit is unavailable",
+        ))
+    }
     fn set_proc_limit(&mut self, count: u64) -> Result<(), EnvError>;
     /// Go expresses rate as 1000 = 1 CPU.
     fn set_cpu_rate(&mut self, rate: u64, period: Duration) -> Result<(), EnvError>;
@@ -208,6 +218,7 @@ pub struct Config {
 pub struct ExecutionLimits {
     pub time: Duration,
     pub memory_bytes: u64,
+    pub memory_swap_limit_enabled: bool,
     pub process_count: u64,
     pub output_bytes: u64,
     pub stack_bytes: u64,
@@ -261,6 +272,9 @@ pub fn set_cgroup_limits(
         ignore_unavailable_controller(cgroup.set_cpu_rate(limits.cpu_rate, period))?;
     }
     ignore_unavailable_controller(cgroup.set_memory_limit(limits.memory_bytes))?;
+    if limits.memory_bytes > 0 && limits.memory_swap_limit_enabled {
+        cgroup.set_memory_swap_limit(limits.memory_bytes)?;
+    }
     ignore_unavailable_controller(cgroup.set_proc_limit(limits.process_count))?;
     Ok(())
 }

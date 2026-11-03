@@ -149,6 +149,7 @@ pub struct LinuxEnvironment {
     enable_cpu_rate: bool,
     cpu_cfs_period: Duration,
     no_fallback: bool,
+    memory_swap_limit_enabled: bool,
     cgroup_pool: Option<Arc<dyn CgroupPool>>,
     keeper: Mutex<Option<NamespaceKeeper>>,
     init_socket: Mutex<Option<Arc<tokio::sync::Mutex<Socket>>>>,
@@ -166,6 +167,7 @@ struct NamespaceKeeper {
 pub struct LinuxEnvironmentPool {
     config: LinuxEnvironmentConfig,
     cgroup_pool: Option<Arc<dyn CgroupPool>>,
+    memory_swap_limit_enabled: bool,
     next_credential_id: AtomicU32,
     idle: Mutex<Vec<Arc<LinuxEnvironment>>>,
     leased: Mutex<HashMap<usize, std::sync::Weak<LinuxEnvironment>>>,
@@ -174,14 +176,19 @@ pub struct LinuxEnvironmentPool {
 impl LinuxEnvironmentPool {
     pub fn new(config: LinuxEnvironmentConfig) -> io::Result<Self> {
         fs::create_dir_all(&config.root_parent)?;
-        let cgroup_pool = create_cgroup_pool(&config);
+        let (cgroup_pool, memory_swap_limit_enabled) = create_cgroup_pool(&config)?;
         Ok(Self {
             next_credential_id: AtomicU32::new(config.container_cred_start.unwrap_or(0)),
             config,
             cgroup_pool,
+            memory_swap_limit_enabled,
             idle: Mutex::new(Vec::new()),
             leased: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn memory_swap_limit_enabled(&self) -> bool {
+        self.memory_swap_limit_enabled
     }
 }
 
@@ -220,6 +227,7 @@ impl crate::worker::EnvironmentPool for LinuxEnvironmentPool {
                 Arc::new(LinuxEnvironment::build_with_cgroup_pool(
                     config,
                     self.cgroup_pool.clone(),
+                    self.memory_swap_limit_enabled,
                 )?)
             }
         };
@@ -261,8 +269,9 @@ impl LinuxEnvironment {
                 )
             })?);
         }
-        let cgroup_pool = create_cgroup_pool(&config);
-        let environment = Self::build_with_cgroup_pool(config, cgroup_pool)?;
+        let (cgroup_pool, memory_swap_limit_enabled) = create_cgroup_pool(&config)?;
+        let environment =
+            Self::build_with_cgroup_pool(config, cgroup_pool, memory_swap_limit_enabled)?;
         crate::runtime_metrics::environment_built();
         Ok(environment)
     }
@@ -270,6 +279,7 @@ impl LinuxEnvironment {
     fn build_with_cgroup_pool(
         config: LinuxEnvironmentConfig,
         cgroup_pool: Option<Arc<dyn CgroupPool>>,
+        memory_swap_limit_enabled: bool,
     ) -> io::Result<Self> {
         let root = make_temp_root(&config.root_parent)?;
         let mut root_guard = TempRootGuard(Some(root.clone()));
@@ -435,6 +445,7 @@ impl LinuxEnvironment {
             enable_cpu_rate: config.enable_cpu_rate,
             cpu_cfs_period: config.cpu_cfs_period,
             no_fallback: config.no_fallback,
+            memory_swap_limit_enabled,
             cgroup_pool,
             keeper: Mutex::new(None),
             init_socket: Mutex::new(None),
@@ -777,6 +788,7 @@ impl LinuxEnvironment {
         let limits = ExecutionLimits {
             time: param.limit.time,
             memory_bytes: param.limit.memory.0,
+            memory_swap_limit_enabled: self.memory_swap_limit_enabled,
             process_count: param.limit.proc,
             output_bytes: param.limit.output.0,
             stack_bytes: param.limit.stack.0,
@@ -973,18 +985,45 @@ impl LinuxEnvironment {
     }
 }
 
-fn create_cgroup_pool(config: &LinuxEnvironmentConfig) -> Option<Arc<dyn CgroupPool>> {
+fn create_cgroup_pool(
+    config: &LinuxEnvironmentConfig,
+) -> io::Result<(Option<Arc<dyn CgroupPool>>, bool)> {
     let builder: Box<dyn CgroupBuilder> = if let Some(roots) = config.cgroup_v1_roots.as_ref() {
         Box::new(crate::env::cgroup_v1::CgroupV1Builder::new(roots.clone()))
     } else if let Some(root) = config.cgroup_root.as_ref() {
         Box::new(CgroupV2Builder::new(root))
     } else {
-        return None;
+        return Ok((None, false));
     };
-    Some(Arc::new(AsyncFreshCgroupPool::new(
-        builder,
-        config.cgroup_pool_size.max(1),
-    )))
+    let swap_support = match builder.random("swap-probe") {
+        Ok(probe) => {
+            let support = probe.check_memory_swap_limit();
+            let destroy = probe.destroy();
+            support.and(destroy)
+        }
+        Err(error) => Err(error),
+    };
+    let memory_swap_limit_enabled = match swap_support {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "rust-judge: cgroup memory swap accounting is unavailable; swap will not be restricted: {error}"
+            );
+            if config.no_fallback {
+                return Err(io::Error::other(format!(
+                    "cgroup memory swap accounting is unavailable with no fallback: {error}"
+                )));
+            }
+            false
+        }
+    };
+    Ok((
+        Some(Arc::new(AsyncFreshCgroupPool::new(
+            builder,
+            config.cgroup_pool_size.max(1),
+        ))),
+        memory_swap_limit_enabled,
+    ))
 }
 
 impl Drop for LinuxEnvironment {

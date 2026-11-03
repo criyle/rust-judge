@@ -215,8 +215,12 @@ fn run(mut config: Config) -> std::io::Result<()> {
                 )
             })?);
     }
-    let runner_config = runner_config_json(&config, &environment_config)?;
-    let environments = Arc::new(LinuxEnvironmentPool::new(environment_config)?);
+    let environments = Arc::new(LinuxEnvironmentPool::new(environment_config.clone())?);
+    let runner_config = runner_config_json(
+        &config,
+        &environment_config,
+        environments.memory_swap_limit_enabled(),
+    )?;
     if config.pre_fork > 0 {
         let mut preforked = Vec::with_capacity(config.pre_fork as usize);
         for _ in 0..config.pre_fork {
@@ -371,6 +375,7 @@ fn container_init_executable(config: &Config) -> std::io::Result<std::path::Path
 fn runner_config_json(
     config: &Config,
     environment: &LinuxEnvironmentConfig,
+    memory_swap_limit_enabled: bool,
 ) -> std::io::Result<serde_json::Value> {
     let cwd = std::env::current_dir()?;
     let prepared = rust_judge::env::prepare_mount_config(
@@ -409,6 +414,7 @@ fn runner_config_json(
     };
     Ok(serde_json::json!({
         "cgroupType": cgroup_type,
+        "memorySwapLimitEnabled": memory_swap_limit_enabled,
         "seccomp": !config.no_seccomp,
         "clone3": rust_judge::container::fork_exec::clone3_available(),
         "mount": mount_values,
@@ -529,9 +535,10 @@ mod tests {
             cgroup_v2_controllers: go_cgroup_controller_names("pids io cpuset cpu memory"),
             ..LinuxEnvironmentConfig::default()
         };
-        let value = runner_config_json(&config, &environment).unwrap();
+        let value = runner_config_json(&config, &environment, true).unwrap();
         for field in [
             "cgroupType",
+            "memorySwapLimitEnabled",
             "seccomp",
             "clone3",
             "mount",
@@ -549,6 +556,7 @@ mod tests {
         assert_eq!(value["workDir"], "/w");
         assert_eq!(value["uid"], 1000);
         assert_eq!(value["gid"], 1000);
+        assert_eq!(value["memorySwapLimitEnabled"], true);
         assert!(value["seccomp"].as_bool().unwrap());
         assert_eq!(
             value["clone3"],

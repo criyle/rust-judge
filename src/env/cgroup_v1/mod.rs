@@ -226,6 +226,22 @@ impl Cgroup for CgroupV1 {
         self.write_controller("memory", "memory.limit_in_bytes", &bytes.to_string())
     }
 
+    fn check_memory_swap_limit(&self) -> Result<(), EnvError> {
+        let path = self.controller("memory").ok_or(EnvError::Unsupported(
+            "cgroup v1 memory controller is unavailable",
+        ))?;
+        fs::metadata(path.join("memory.memsw.limit_in_bytes"))?;
+        Ok(())
+    }
+
+    fn set_memory_swap_limit(&mut self, memory_bytes: u64) -> Result<(), EnvError> {
+        self.write_controller(
+            "memory",
+            "memory.memsw.limit_in_bytes",
+            &memory_bytes.to_string(),
+        )
+    }
+
     fn set_proc_limit(&mut self, count: u64) -> Result<(), EnvError> {
         self.write_controller("pids", "pids.max", &count.to_string())
     }

@@ -12,6 +12,7 @@ The service and embedded library have different responsibilities:
 - The embedded library does not provide an authentication or network boundary. The embedding application owns those controls, along with lifecycle, concurrency, storage permissions, and observability.
 - The default `LinuxEnvironmentConfig` enables seccomp and configures namespaces, but leaves cgroup roots unset. Rlimits still apply, but cgroup CPU, memory, and process controls require a working cgroup hierarchy.
 - Fallback behavior can leave cgroup enforcement unavailable for non-root service operation unless startup is configured to fail instead. For a service relying on cgroups, use `--no-fallback` and verify the resulting hierarchy and effective limits on the deployment host.
+- When a memory cgroup is configured and its swap-accounting control is available, rust-judge sets swap to zero for memory-limited jobs. If the control is missing, startup warns and leaves swap unrestricted; `--no-fallback` makes startup fail instead. `/config` reports this as `runnerConfig.memorySwapLimitEnabled`.
 
 ## Network exposure
 

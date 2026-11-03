@@ -419,6 +419,16 @@ impl Cgroup for CgroupV2 {
         self.write_optional("memory.max", &bytes.to_string())
     }
 
+    fn check_memory_swap_limit(&self) -> Result<(), EnvError> {
+        let path = self.path.join("memory.swap.max");
+        fs::metadata(path)?;
+        Ok(())
+    }
+
+    fn set_memory_swap_limit(&mut self, _memory_bytes: u64) -> Result<(), EnvError> {
+        self.write_optional("memory.swap.max", "0")
+    }
+
     fn set_proc_limit(&mut self, count: u64) -> Result<(), EnvError> {
         self.write_optional("pids.max", &count.to_string())
     }
@@ -621,6 +631,7 @@ mod cgroup_v2_tests {
         for name in [
             "cpuset.cpus",
             "memory.max",
+            "memory.swap.max",
             "pids.max",
             "cpu.max",
             "cpu.stat",
@@ -637,6 +648,8 @@ mod cgroup_v2_tests {
         fs::write(dir.join("pids.peak"), "3\n").unwrap();
         cgroup.set_cpuset("0-2").unwrap();
         cgroup.set_memory_limit(1 << 20).unwrap();
+        cgroup.check_memory_swap_limit().unwrap();
+        cgroup.set_memory_swap_limit(1 << 20).unwrap();
         cgroup.set_proc_limit(8).unwrap();
         cgroup
             .set_cpu_rate(500, Duration::from_millis(100))
@@ -648,6 +661,10 @@ mod cgroup_v2_tests {
         assert_eq!(
             fs::read_to_string(dir.join("memory.max")).unwrap(),
             "1048576"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("memory.swap.max")).unwrap(),
+            "0"
         );
         assert_eq!(fs::read_to_string(dir.join("pids.max")).unwrap(), "8");
         assert_eq!(
@@ -665,6 +682,7 @@ mod cgroup_v2_tests {
         for name in [
             "cpuset.cpus",
             "memory.max",
+            "memory.swap.max",
             "pids.max",
             "cpu.max",
             "cpu.stat",

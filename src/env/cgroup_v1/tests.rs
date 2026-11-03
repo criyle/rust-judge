@@ -215,6 +215,12 @@ fn creates_configures_samples_and_destroys_all_controller_groups() {
 
     cgroup.set_cpuset("1-2").unwrap();
     cgroup.set_memory_limit(1 << 20).unwrap();
+    cgroup.check_memory_swap_limit().unwrap();
+    cgroup.set_memory_swap_limit(1 << 20).unwrap();
+    assert_eq!(
+        fs::read_to_string(paths["memory"].join("memory.memsw.limit_in_bytes")).unwrap(),
+        (1 << 20).to_string()
+    );
     cgroup.set_proc_limit(7).unwrap();
     cgroup
         .set_cpu_rate(500, Duration::from_millis(100))

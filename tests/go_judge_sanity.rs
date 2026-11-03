@@ -57,6 +57,25 @@ fn post(address: SocketAddr, body: &Value) -> std::io::Result<(String, Value)> {
     Ok((headers, value))
 }
 
+fn get(address: SocketAddr, path: &str) -> std::io::Result<(String, Value)> {
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let split = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| std::io::Error::other("HTTP response has no header terminator"))?;
+    let headers = String::from_utf8_lossy(&response[..split]).into_owned();
+    let value = serde_json::from_slice(&response[split + 4..])
+        .map_err(|error| std::io::Error::other(format!("decode response: {error}")))?;
+    Ok((headers, value))
+}
+
 fn temporary_directory() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -270,8 +289,84 @@ fn go_judge_basic_functionality_sanity_cases() {
         eprintln!("PASS {name}");
     }
 
+    run_swap_regression_case(address);
+
     drop(server);
     fs::remove_dir_all(directory).expect("remove server data directory");
+}
+
+fn run_swap_regression_case(address: SocketAddr) {
+    const MEMORY_LIMIT: u64 = 32 * 1024 * 1024;
+    const ALLOCATION: u64 = 256 * 1024 * 1024;
+
+    let (_, config) = get(address, "/config").expect("read rust-judge config");
+    if !config["runnerConfig"]["memorySwapLimitEnabled"]
+        .as_bool()
+        .unwrap_or(false)
+    {
+        eprintln!("SKIP memory swap limit regression: cgroup swap accounting is unavailable");
+        return;
+    }
+    let swap_free = fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|contents| {
+            contents.lines().find_map(|line| {
+                let mut fields = line.split_whitespace();
+                (fields.next()? == "SwapFree:")
+                    .then(|| fields.next()?.parse::<u64>().ok())
+                    .flatten()
+            })
+        })
+        .unwrap_or(0)
+        .saturating_mul(1024);
+    if swap_free < ALLOCATION {
+        eprintln!(
+            "SKIP memory swap limit regression: needs {ALLOCATION} bytes free swap, found {swap_free}"
+        );
+        return;
+    }
+
+    let program = format!(
+        "n={ALLOCATION}; x=bytearray(n); x[::4096]=b'x'*(n//4096); print('ALLOCATION_COMPLETED')"
+    );
+    let request = json!({
+        "cmd": [{
+            "args": ["/usr/bin/python3", "-c", program],
+            "env": ["PATH=/usr/bin:/bin"],
+            "cpuLimit": 10_000_000_000u64,
+            "realCpuLimit": 12_000_000_000u64,
+            "memoryLimit": MEMORY_LIMIT,
+            "procLimit": 50,
+            "files": [
+                {"src": "/dev/null"},
+                {"name": "stdout", "max": 10240},
+                {"name": "stderr", "max": 10240}
+            ]
+        }]
+    });
+    let (headers, response) = post(address, &request).expect("run swap limit regression");
+    assert!(headers.starts_with("HTTP/1.1 200"), "{headers}");
+    let result = &response[0];
+    assert!(
+        matches!(
+            result["status"].as_str(),
+            Some("Memory Limit Exceeded" | "Signalled")
+        ),
+        "swap escape regression should terminate at the memory cap: {result}"
+    );
+    assert_ne!(
+        result["exitStatus"].as_i64(),
+        Some(0),
+        "workload completed despite a memory cgroup limit: {result}"
+    );
+    assert!(
+        !result["files"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ALLOCATION_COMPLETED"),
+        "workload escaped the memory limit by using swap: {result}"
+    );
+    eprintln!("PASS Memory Limit Does Not Permit Swap Escape");
 }
 
 fn delete_file(address: SocketAddr, file_id: &str) -> std::io::Result<(String, Value)> {
