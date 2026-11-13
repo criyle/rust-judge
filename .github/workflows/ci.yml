@@ -49,6 +49,8 @@ jobs:
         run: cargo build --locked --bins
       - name: Unit tests (privileged sandbox)
         if: matrix.toolchain == 'stable'
+        env:
+          RUST_SANDBOX_CONTAINER_INIT: ${{ github.workspace }}/target/debug/container-init
         run: |
           mapfile -t host_capability_skips < .github/namespace-test-skips.txt
           test_args=()
