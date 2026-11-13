@@ -1,6 +1,6 @@
 [package]
 name = "rust-judge"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["criyle <gaoyang4425@gmail.com>"]
 edition = "2024"
 rust-version = "1.88"

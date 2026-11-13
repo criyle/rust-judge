@@ -417,9 +417,7 @@ pub(super) fn reap_children(workload_pgid: i32) {
 
     let mut status = 0;
     let remaining = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
-    if remaining == -1
-        && io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
-    {
+    if remaining == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
         return;
     }
     unsafe { libc::kill(-1, libc::SIGKILL) };
