@@ -88,6 +88,7 @@ pub fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Result<()>
     ignore_container_signals();
     let mut command = Command::new(executable);
     command.args(workload_args);
+    command.process_group(0);
     // The helper remains PID 1 and reaps descendants, matching go-sandbox's
     // container init. Restore default signal dispositions in the workload.
     // SAFETY: the hook only resets process signal dispositions using sigaction.
@@ -128,27 +129,45 @@ pub fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Result<()>
             Ok(())
         });
     }
-    let status = command.status()?;
-    // Kill and reap any descendants the workload left behind before PID 1
-    // exits. These syscalls are allowed by the installed sandbox profile.
-    unsafe {
-        libc::kill(-1, libc::SIGKILL);
-        let mut status = 0;
-        loop {
-            let result = libc::waitpid(-1, &mut status, 0);
-            if result > 0 {
-                continue;
-            }
-            if result == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            break;
-        }
-    }
+    let mut child = command.spawn()?;
+    let workload_pgid = child.id() as i32;
+    let status = child.wait()?;
+    // Reap this workload first; scan and kill the whole namespace only if a
+    // descendant escaped its process group.
+    reap_workload_descendants(workload_pgid);
     let code = status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(libc::SIGKILL));
     std::process::exit(code)
+}
+
+fn reap_workload_descendants(workload_pgid: i32) {
+    unsafe { libc::kill(-workload_pgid, libc::SIGKILL) };
+    wait_for_children(-workload_pgid);
+
+    let mut status = 0;
+    let remaining = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+    if remaining == -1
+        && io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+    {
+        return;
+    }
+    unsafe { libc::kill(-1, libc::SIGKILL) };
+    wait_for_children(-1);
+}
+
+fn wait_for_children(selector: libc::pid_t) {
+    loop {
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(selector, &mut status, 0) };
+        if result > 0 {
+            continue;
+        }
+        if result == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        break;
+    }
 }
 
 fn run_keepalive(args: impl IntoIterator<Item = std::ffi::OsString>) -> io::Result<()> {

@@ -397,18 +397,35 @@ pub(super) fn process_vm_hwm_bytes(status: &str) -> Option<u64> {
 }
 
 pub(super) fn reap_children(workload_pgid: i32) {
-    // Container PID 1 owns every orphan in the PID namespace, matching Go's
-    // waitAll behavior. Unit tests call execute() from the host test process,
-    // where waitpid(-1) could steal children from other concurrently running
-    // tests; there, constrain cleanup to this workload's process group.
-    let child_selector = if unsafe { libc::getpid() } == 1 {
-        -1
-    } else {
-        -workload_pgid
-    };
+    // Reap the workload's process group first. Only PID 1 may fall back to
+    // namespace-wide cleanup, and only when a descendant escaped that group.
+    let child_selector = -workload_pgid;
     loop {
         let mut status = 0;
         let pid = unsafe { libc::waitpid(child_selector, &mut status, 0) };
+        if pid > 0 {
+            continue;
+        }
+        if pid == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        break;
+    }
+    if unsafe { libc::getpid() } != 1 {
+        return;
+    }
+
+    let mut status = 0;
+    let remaining = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+    if remaining == -1
+        && io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+    {
+        return;
+    }
+    unsafe { libc::kill(-1, libc::SIGKILL) };
+    loop {
+        let mut status = 0;
+        let pid = unsafe { libc::waitpid(-1, &mut status, 0) };
         if pid > 0 {
             continue;
         }
