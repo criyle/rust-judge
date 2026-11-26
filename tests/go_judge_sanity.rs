@@ -289,10 +289,37 @@ fn go_judge_basic_functionality_sanity_cases() {
         eprintln!("PASS {name}");
     }
 
+    run_sysv_ipc_isolation_regression_case(address, &base);
     run_swap_regression_case(address);
 
     drop(server);
     fs::remove_dir_all(directory).expect("remove server data directory");
+}
+
+fn run_sysv_ipc_isolation_regression_case(address: SocketAddr, base: &Value) {
+    for (name, script) in [
+        (
+            "SysV IPC exists within an Execve",
+            "ipcmk -M 4096 >/dev/null && test \"$(wc -l < /proc/sysvipc/shm)\" -gt 1",
+        ),
+        (
+            "SysV IPC is isolated between Execve calls",
+            "test \"$(wc -l < /proc/sysvipc/shm)\" -eq 1",
+        ),
+    ] {
+        let mut command = base.clone();
+        command["args"] = json!(["/bin/sh", "-c", script]);
+        let (headers, response) = post(address, &json!({ "cmd": [command] }))
+            .unwrap_or_else(|error| panic!("{name}: request failed: {error}"));
+        assert!(headers.starts_with("HTTP/1.1 200"), "{name}: {headers}");
+        let result = &response[0];
+        assert_eq!(
+            result["status"].as_str(),
+            Some("Accepted"),
+            "{name}: {result}"
+        );
+        eprintln!("PASS {name}");
+    }
 }
 
 fn run_swap_regression_case(address: SocketAddr) {

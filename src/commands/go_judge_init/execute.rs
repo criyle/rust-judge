@@ -123,7 +123,9 @@ pub(super) async fn execute(
         host_name: None,
         domain_name: None,
         sync_fn: None,
-        clone_flags: 0,
+        // Give each Execve its own SysV IPC objects. Descendants of this
+        // workload still share the namespace, which is destroyed on exit.
+        clone_flags: libc::CLONE_NEWIPC,
         credential: config.uid.zip(config.gid).map(|(uid, gid)| Credential {
             uid,
             gid,
